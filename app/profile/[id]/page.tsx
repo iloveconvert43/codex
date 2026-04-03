@@ -8,21 +8,21 @@ import useSWR from 'swr'
 import Link from 'next/link'
 import Image from 'next/image'
 import {
-  ArrowLeft, UserPlus, UserCheck, MessageCircle,
+  ArrowLeft, MessageCircle,
   MapPin, Shield, Grid3X3, BookOpen, MoreHorizontal,
-  ChevronRight, Briefcase, GraduationCap, Globe
+  Briefcase, GraduationCap, Globe
 } from 'lucide-react'
 import { api, getErrorMessage, swrFetcher } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { cn, getRelativeTime } from '@/lib/utils'
 import BottomNav from '@/components/layout/BottomNav'
 import DesktopSidebar from '@/components/layout/DesktopSidebar'
-import Avatar from '@/components/ui/Avatar'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
 import { usePendingUserPosts } from '@/hooks/usePendingPosts'
 import { mergePostsWithPending } from '@/lib/pendingPosts'
 import { useRealtimePostCounts } from '@/hooks/useRealtimePostCounts'
+import ProfileAboutSections from '@/components/profile/ProfileAboutSections'
 
 // ── Avatar component ──────────────────────────────────────────
 function ProfileAvatar({ user, size = 86 }: { user: any; size?: number }) {
@@ -185,6 +185,14 @@ export default function ProfileDetailPage() {
   const isFollowing    = fd?.is_following    ?? false
   const isOwnProfile   = fd?.is_own_profile  ?? (myProfile?.id === id)
   const actualFollowing = following !== null ? following : isFollowing
+  const coverUrl = ext?.cover_url || user?.cover_url || null
+  const currentCity = ext?.current_city || user?.current_city || user?.city
+  const pinnedInfo = ext?.pinned_info || user?.pinned_info
+  const interestPreviewTags = Array.from(new Set(
+    ['music', 'tv_shows', 'movies', 'games', 'sports', 'places', 'hobbies', 'books']
+      .flatMap((key) => Array.isArray(ext?.interests?.[key]) ? ext.interests[key] : [])
+      .filter(Boolean)
+  )).slice(0, 6)
 
   async function handleFollow() {
     if (!isLoggedIn) { router.push('/login'); return }
@@ -242,16 +250,16 @@ export default function ProfileDetailPage() {
   const ProfileContent = () => (
     <div className="pb-nav">
       {/* ── Cover photo ── */}
-      <div className="relative h-36 bg-gradient-to-br from-primary/40 via-accent-red/20 to-accent-yellow/10 overflow-hidden">
-        {user.cover_url && (
-          <img src={user.cover_url} className="w-full h-full object-cover" alt="" loading="lazy" />
+      <div className="relative h-44 sm:h-52 bg-gradient-to-br from-primary/40 via-accent-red/20 to-accent-yellow/10 overflow-hidden">
+        {coverUrl && (
+          <img src={coverUrl} className="w-full h-full object-cover" alt="" loading="lazy" />
         )}
         {/* Dark gradient at bottom for avatar overlap */}
-        <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-bg/80 to-transparent" />
+        <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-bg/85 to-transparent" />
       </div>
 
       {/* ── Avatar + Actions row ── */}
-      <div className="px-4 -mt-10 flex items-end justify-between mb-3">
+      <div className="px-4 -mt-12 flex items-end justify-between mb-3">
         <div className="relative">
           <div className="ring-4 ring-bg rounded-full">
             <ProfileAvatar user={user} size={86} />
@@ -266,8 +274,8 @@ export default function ProfileDetailPage() {
         {/* Action buttons */}
         <div className="flex items-center gap-2 pb-1">
           {isOwnProfile ? (
-            <Link href="/settings"
-              className="px-5 py-2 rounded-xl border border-border text-sm font-semibold hover:bg-bg-card2 transition-colors">
+            <Link href="/profile/edit"
+              className="px-5 py-2.5 rounded-xl border border-border text-sm font-semibold hover:bg-bg-card2 transition-colors">
               Edit Profile
             </Link>
           ) : (
@@ -303,6 +311,9 @@ export default function ProfileDetailPage() {
         {user.bio && (
           <p className="text-sm text-text leading-relaxed mb-2">{user.bio}</p>
         )}
+        {pinnedInfo && (
+          <p className="text-sm text-text-secondary leading-relaxed mb-2">{pinnedInfo}</p>
+        )}
 
         {/* Instagram-style details strip below bio */}
         <div className="flex flex-col gap-1.5 mb-2">
@@ -327,12 +338,12 @@ export default function ProfileDetailPage() {
             ) : null
           })()}
           {/* City */}
-          {(user.city || ext?.hometown) && (
+          {(currentCity || ext?.hometown) && (
             <span className="flex items-center gap-1.5 text-xs text-text-secondary">
               <MapPin size={11} className="text-text-muted flex-shrink-0" />
               <span>
-                {user.city}{user.city && ext?.hometown && user.city !== ext.hometown ? ` · From ${ext.hometown}` : ''}
-                {!user.city && ext?.hometown ? `From ${ext.hometown}` : ''}
+                {currentCity}{currentCity && ext?.hometown && currentCity !== ext.hometown ? ` · From ${ext.hometown}` : ''}
+                {!currentCity && ext?.hometown ? `From ${ext.hometown}` : ''}
               </span>
             </span>
           )}
@@ -353,9 +364,9 @@ export default function ProfileDetailPage() {
         </div>
 
         {/* Interest tags — Instagram style */}
-        {ext?.interests?.topics?.length > 0 && (
+        {interestPreviewTags.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-1">
-            {ext.interests.topics.slice(0, 6).map((t: string, i: number) => (
+            {interestPreviewTags.map((t: string, i: number) => (
               <span key={i} className="text-[10px] bg-primary/8 text-primary px-2 py-0.5 rounded-full font-medium">
                 {t}
               </span>
@@ -455,126 +466,7 @@ export default function ProfileDetailPage() {
 
       {/* ── About tab ── */}
       {activeTab === 'about' && (
-        <div className="px-4 py-4 space-y-4">
-          {/* Basic info */}
-          <div className="glass-card p-4 rounded-2xl space-y-3">
-            <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider">Basic Info</h3>
-            {user.city && (
-              <div className="flex items-center gap-3">
-                <MapPin size={16} className="text-primary flex-shrink-0" />
-                <span className="text-sm">{user.city}</span>
-              </div>
-            )}
-            {ext?.hometown && (
-              <div className="flex items-center gap-3">
-                <span className="text-base flex-shrink-0">🏡</span>
-                <span className="text-sm">From {ext.hometown}</span>
-              </div>
-            )}
-            {ext?.relationship_status && (
-              <div className="flex items-center gap-3">
-                <span className="text-base flex-shrink-0">❤️</span>
-                <span className="text-sm capitalize">{ext.relationship_status.replace('_', ' ')}</span>
-              </div>
-            )}
-            {ext?.pronouns && (
-              <div className="flex items-center gap-3">
-                <span className="text-base flex-shrink-0">👤</span>
-                <span className="text-sm">{ext.pronouns}</span>
-              </div>
-            )}
-            {points && (
-              <div className="flex items-center gap-3">
-                <span className="text-base flex-shrink-0">⭐</span>
-                <span className="text-sm">Level: <span className="text-primary font-semibold capitalize">{(points.level || 'newcomer').replace(/_/g, ' ')}</span></span>
-              </div>
-            )}
-          </div>
-
-          {/* Work */}
-          {ext?.work?.length > 0 && (
-            <div className="glass-card p-4 rounded-2xl space-y-3">
-              <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider">Work</h3>
-              {ext.work.map((w: any, i: number) => (
-                <div key={i} className="flex items-start gap-3">
-                  <Briefcase size={15} className="text-primary mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-semibold">{w.position || w.role}</p>
-                    <p className="text-xs text-text-muted">{w.company}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Education */}
-          {ext?.education?.length > 0 && (
-            <div className="glass-card p-4 rounded-2xl space-y-3">
-              <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider">Education</h3>
-              {ext.education.map((e: any, i: number) => (
-                <div key={i} className="flex items-start gap-3">
-                  <GraduationCap size={15} className="text-primary mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-semibold">{e.school}</p>
-                    <p className="text-xs text-text-muted">{e.degree}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Interests */}
-          {ext?.interests?.topics?.length > 0 && (
-            <div className="glass-card p-4 rounded-2xl">
-              <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Interests</h3>
-              <div className="flex flex-wrap gap-2">
-                {ext.interests.topics.map((t: string, i: number) => (
-                  <span key={i} className="text-xs bg-primary/10 text-primary px-3 py-1 rounded-full font-medium">
-                    {t}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Social links */}
-          {(ext?.social_instagram || ext?.social_twitter || ext?.social_linkedin) && (
-            <div className="glass-card p-4 rounded-2xl space-y-3">
-              <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider">Social</h3>
-              {ext.social_instagram && (
-                <div className="flex items-center gap-3">
-                  <span className="text-base">📸</span>
-                  <span className="text-sm text-primary">@{ext.social_instagram}</span>
-                </div>
-              )}
-              {ext.social_twitter && (
-                <div className="flex items-center gap-3">
-                  <span className="text-base">🐦</span>
-                  <span className="text-sm text-primary">@{ext.social_twitter}</span>
-                </div>
-              )}
-              {ext.social_linkedin && (
-                <div className="flex items-center gap-3">
-                  <span className="text-base">💼</span>
-                  <span className="text-sm text-primary">{ext.social_linkedin}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Empty state */}
-          {!user.city && !ext?.hometown && !ext?.work?.length && !ext?.education?.length && !ext?.interests?.topics?.length && (
-            <div className="text-center py-10 text-text-muted">
-              <p className="text-3xl mb-2">📝</p>
-              <p className="text-sm">No details yet</p>
-              {isOwnProfile && (
-                <Link href="/settings" className="text-xs text-primary mt-2 inline-block">
-                  Add details →
-                </Link>
-              )}
-            </div>
-          )}
-        </div>
+        <ProfileAboutSections user={user} ext={ext} points={points} isOwnProfile={isOwnProfile} />
       )}
     </div>
   )

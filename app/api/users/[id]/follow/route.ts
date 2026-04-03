@@ -14,6 +14,7 @@ import { createAdminClient } from '@/lib/supabase-server'
 import { isValidUUID, rateLimit } from '@/lib/security'
 import { queuePush } from '@/lib/push'
 import { awardPoints } from '@/lib/points'
+import { clearSocialGraph, invalidateFeed, invalidateProfile } from '@/lib/redis'
 
 type Ctx = { params: { id: string } }
 
@@ -93,6 +94,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       // Unfollow
       await supabase.from('follows').delete()
         .eq('follower_id', me.id).eq('following_id', params.id)
+      await Promise.allSettled([
+        clearSocialGraph(me.id),
+        invalidateFeed(me.id),
+        invalidateProfile(me.id),
+        invalidateProfile(params.id),
+      ])
       return NextResponse.json({ is_following: false, action: 'unfollowed' })
     }
 
@@ -128,6 +135,11 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         body: 'Tap to accept or decline',
         url: `/profile/${me.id}` }).then(() => {}).catch(() => {})
 
+      await Promise.allSettled([
+        invalidateProfile(params.id),
+        invalidateProfile(me.id),
+      ])
+
       return NextResponse.json({
         is_following:    false,
         action:          'request_sent',
@@ -155,6 +167,13 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       title: `${me.display_name || me.username || 'Someone'} followed you`,
       body: 'Check out their profile!',
       url: `/profile/${me.id}` }).then(() => {}).catch(() => {})
+
+    await Promise.allSettled([
+      clearSocialGraph(me.id),
+      invalidateFeed(me.id),
+      invalidateProfile(me.id),
+      invalidateProfile(params.id),
+    ])
 
     return NextResponse.json({ is_following: true, action: 'followed' })
   } catch (err: any) {

@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { X, MapPin, Smile, Users, Film, Image as ImageIcon, Gift, Star, ChevronDown, ChevronRight, Loader2, Plus, Trash2 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
@@ -17,8 +17,49 @@ import { cn } from '@/lib/utils'
 import useSWR from 'swr'
 import TopBar from '@/components/layout/TopBar'
 import BottomNav from '@/components/layout/BottomNav'
+import type { Post } from '@/types'
 
 const DRAFT_KEY = 'hushly-post-draft-v2'
+const FEED_REFRESH_KEY = 'hushly-feed-refresh'
+const PENDING_POST_KEY = 'hushly-pending-post'
+const DYNAMIC_CACHE_NAMES = ['feed-cache', 'apis', 'pages', 'pages-rsc', 'pages-rsc-prefetch', 'start-url', 'next-data']
+
+async function clearDynamicCaches() {
+  if (typeof window === 'undefined' || !('caches' in window)) return
+  try {
+    const cacheKeys = await caches.keys()
+    await Promise.all(
+      cacheKeys
+        .filter((key) => DYNAMIC_CACHE_NAMES.some((name) => key.includes(name)))
+        .map((key) => caches.delete(key))
+    )
+  } catch {
+    // Best effort only — posting should still succeed even if cache cleanup fails.
+  }
+}
+
+function buildPendingPost(createdPost: any, profile: any): Post {
+  return {
+    ...createdPost,
+    tags: Array.isArray(createdPost?.tags) ? createdPost.tags : [],
+    reaction_counts: createdPost?.reaction_counts || { interesting: 0, funny: 0, deep: 0, curious: 0 },
+    comment_count: createdPost?.comment_count ?? 0,
+    reshare_count: createdPost?.reshare_count ?? 0,
+    reveal_count: createdPost?.reveal_count ?? 0,
+    view_count: createdPost?.view_count ?? 0,
+    has_revealed: createdPost?.has_revealed ?? false,
+    is_deleted: createdPost?.is_deleted ?? false,
+    user: createdPost?.user || (profile ? {
+      id: profile.id,
+      full_name: profile.full_name ?? null,
+      username: profile.username ?? null,
+      display_name: profile.display_name ?? profile.full_name ?? null,
+      avatar_url: profile.avatar_url ?? null,
+      is_verified: !!profile.is_verified,
+      city: profile.city ?? null,
+    } : null),
+  } as Post
+}
 
 // ── FEELINGS ──────────────────────────────────────────────────
 const FEELINGS = [
@@ -248,7 +289,7 @@ export default function CreatePage() {
 
       const validTags = tags.filter(t => t.length >= 2 && t.length <= 30)
 
-      await api.post('/api/posts', {
+      const created = await api.post<{ data: Post }>('/api/posts', {
         content: content.trim(),
         image_url, video_url,
         gif_url: gifUrl || null,
@@ -274,10 +315,20 @@ export default function CreatePage() {
           .filter((v, i, a) => a.indexOf(v) === i) }, { requireAuth: true })
 
       localStorage.removeItem(DRAFT_KEY)
-      try { sessionStorage.setItem('hushly-feed-refresh', '1') } catch {}
+      const refreshNonce = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      try {
+        sessionStorage.setItem(FEED_REFRESH_KEY, refreshNonce)
+        if (created?.data) {
+          sessionStorage.setItem(PENDING_POST_KEY, JSON.stringify({
+            post: buildPendingPost(created.data, profile),
+            storedAt: Date.now(),
+          }))
+        }
+      } catch {}
+      await clearDynamicCaches()
       toast.success('Posted! 🎉')
-      // Avoid stale preserved-page state and client-side router crashes after successful post
-      window.location.assign('/')
+      // Force a unique navigation target so stale page caches cannot win after posting.
+      window.location.replace(`/?posted=${encodeURIComponent(refreshNonce)}`)
     } catch (err) {
       toast.error(getErrorMessage(err))
     } finally {

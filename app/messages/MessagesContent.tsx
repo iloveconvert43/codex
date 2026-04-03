@@ -2,26 +2,27 @@
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
-import { useState, useEffect, useRef, useCallback, memo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import {
   ArrowLeft, Send, Loader2, MessageCircle, Check, CheckCheck,
-  Phone, Video, MoreVertical, Smile, Trash2, Image as ImageIcon
+  Phone, Video, MoreVertical, Smile, Trash2,
+  MoreHorizontal, Search, ImagePlus, ThumbsUp, X
 } from 'lucide-react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import { api, getErrorMessage, swrFetcher } from '@/lib/api'
+import { api, apiFetch, getErrorMessage, swrFetcher } from '@/lib/api'
 import { uploadToImageKit, getImageKitUrl } from '@/lib/upload'
 import { useAuth } from '@/hooks/useAuth'
 import Avatar from '@/components/ui/Avatar'
 import BottomNav from '@/components/layout/BottomNav'
 import DesktopSidebar from '@/components/layout/DesktopSidebar'
-import { getRelativeTime } from '@/lib/utils'
 import toast from 'react-hot-toast'
 import { sendMessageSchema, validate } from '@/lib/validation/schemas'
 import { analytics } from '@/lib/analytics'
 import { cn } from '@/lib/utils'
+import { getDirectMessagePreview, isDirectMessageDeletedForEveryone, normalizeDirectMessageAttachments } from '@/lib/direct-messages'
 
 
 function formatChatTime(value: string | number | Date | null | undefined): string {
@@ -360,6 +361,200 @@ function CallOverlay({ call, otherUser }: { call: ReturnType<typeof useCall>; ot
   )
 }
 
+function formatDayLabel(value: string | number | Date | null | undefined) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const today = new Date()
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+  const startOfMessage = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+  const diffDays = Math.round((startOfToday - startOfMessage) / 86400000)
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
+}
+
+type PendingMedia = {
+  id: string
+  file: File
+  previewUrl: string
+  type: 'image' | 'video'
+}
+
+function MessageAttachments({
+  attachments,
+  isMine,
+}: {
+  attachments: Array<{ type: 'image' | 'video'; url: string; thumbnail_url?: string | null }>
+  isMine: boolean
+}) {
+  if (!attachments.length) return null
+  const cols = attachments.length === 1 ? 'grid-cols-1' : attachments.length === 2 ? 'grid-cols-2' : 'grid-cols-2'
+
+  return (
+    <div className={cn('grid gap-2 mb-2', cols)}>
+      {attachments.map((item, index) => (
+        item.type === 'video' ? (
+          <div
+            key={`${item.url}-${index}`}
+            className={cn(
+              'relative overflow-hidden rounded-[20px] border',
+              attachments.length === 1 ? 'max-w-sm' : 'aspect-square',
+              isMine ? 'border-white/20 bg-white/10' : 'border-border bg-bg-card'
+            )}
+          >
+            <video
+              src={item.url}
+              poster={item.thumbnail_url || undefined}
+              controls
+              playsInline
+              className={cn('w-full h-full object-cover', attachments.length === 1 ? 'max-h-80' : '')}
+            />
+          </div>
+        ) : (
+          <a
+            key={`${item.url}-${index}`}
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(
+              'relative overflow-hidden rounded-[20px] border',
+              attachments.length === 1 ? 'max-w-sm' : 'aspect-square',
+              isMine ? 'border-white/20 bg-white/10' : 'border-border bg-bg-card'
+            )}
+          >
+            <img
+              src={getImageKitUrl(item.url, { w: attachments.length === 1 ? 900 : 520, q: 80 })}
+              alt="Message attachment"
+              className={cn('w-full h-full object-cover', attachments.length === 1 ? 'max-h-80' : '')}
+              loading="lazy"
+            />
+          </a>
+        )
+      ))}
+    </div>
+  )
+}
+
+function MessageActionsSheet({
+  message,
+  currentUserId,
+  onClose,
+  onDelete,
+}: {
+  message: any | null
+  currentUserId: string | null | undefined
+  onClose: () => void
+  onDelete: (scope: 'me' | 'everyone') => Promise<void>
+}) {
+  if (!message) return null
+  const isMine = message.sender_id === currentUserId
+  const preview = getDirectMessagePreview(message, currentUserId)
+
+  return (
+    <div className="fixed inset-0 z-[210] bg-black/45 backdrop-blur-sm flex items-end justify-center p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-md glass-card rounded-[28px] p-4 space-y-4 animate-slide-up"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="w-12 h-1.5 rounded-full bg-border mx-auto" />
+        <div className="text-center">
+          <p className="text-sm font-semibold">{isMine ? 'Your message' : 'Message options'}</p>
+          <p className="text-xs text-text-muted mt-1 line-clamp-2">
+            {preview || 'Attachment'}
+          </p>
+        </div>
+        <div className="space-y-2">
+          {isMine && (
+            <button
+              onClick={() => onDelete('everyone')}
+              className="w-full flex items-center gap-3 rounded-2xl border border-border px-4 py-3 text-left hover:bg-bg-card2 transition-colors"
+            >
+              <Trash2 size={16} className="text-accent-red" />
+              <div>
+                <p className="text-sm font-semibold">Delete for everyone</p>
+                <p className="text-xs text-text-muted">Remove it from both chats.</p>
+              </div>
+            </button>
+          )}
+          <button
+            onClick={() => onDelete('me')}
+            className="w-full flex items-center gap-3 rounded-2xl border border-border px-4 py-3 text-left hover:bg-bg-card2 transition-colors"
+          >
+            <X size={16} className="text-text-muted" />
+            <div>
+              <p className="text-sm font-semibold">{isMine ? 'Delete for you' : 'Remove for you'}</p>
+              <p className="text-xs text-text-muted">Only this device view will hide it.</p>
+            </div>
+          </button>
+        </div>
+        <button onClick={onClose} className="w-full rounded-2xl bg-bg-card2 py-3 text-sm font-semibold text-text-muted">
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function MessageRequestBox({
+  otherUser,
+  userId,
+  onSent,
+}: {
+  otherUser: any
+  userId: string
+  onSent: () => void
+}) {
+  const [requestMessage, setRequestMessage] = useState('')
+  const [sendingRequest, setSendingRequest] = useState(false)
+
+  async function handleSendRequest() {
+    const fallback = `Hi ${otherUser?.display_name || otherUser?.username || 'there'}, I would love to chat.`
+    const payload = requestMessage.trim() || fallback
+    setSendingRequest(true)
+    try {
+      await api.post('/api/messages/requests', {
+        to_user_id: userId,
+        message: payload,
+      }, { requireAuth: true })
+      toast.success('Message request sent')
+      setRequestMessage('')
+      onSent()
+    } catch (e) {
+      toast.error(getErrorMessage(e))
+    } finally {
+      setSendingRequest(false)
+    }
+  }
+
+  return (
+    <div className="border-t border-border bg-bg px-4 py-4">
+      <div className="glass-card rounded-[24px] p-4">
+        <p className="text-sm font-semibold">Send a message request</p>
+        <p className="text-xs text-text-muted mt-1">
+          {otherUser?.display_name || 'This user'} needs to accept before the chat opens fully.
+        </p>
+        <textarea
+          value={requestMessage}
+          onChange={(event) => setRequestMessage(event.target.value)}
+          maxLength={500}
+          rows={3}
+          placeholder="Write a short intro..."
+          className="input-base mt-3 resize-none text-sm"
+        />
+        <button
+          onClick={handleSendRequest}
+          disabled={sendingRequest}
+          className="btn-primary mt-3 w-full py-3 text-sm flex items-center justify-center gap-2"
+        >
+          {sendingRequest && <Loader2 size={15} className="animate-spin" />}
+          {sendingRequest ? 'Sending…' : 'Send Request'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────
 export default function MessagesContent() {
   const { isLoggedIn, loading } = useAuth()
@@ -385,12 +580,6 @@ export default function MessagesContent() {
           <ChatArea userId={withUser} />
         ) : (
           <>
-            <div className="sticky top-0 z-50 bg-bg/90 backdrop-blur-xl border-b border-border safe-top flex-shrink-0">
-              <div className="flex items-center gap-3 px-4 py-3">
-                <Link href="/" className="text-text-muted hover:text-text"><ArrowLeft size={22} /></Link>
-                <h1 className="font-bold flex items-center gap-2"><MessageCircle size={18} /> Messages</h1>
-              </div>
-            </div>
             <div className="flex-1 overflow-y-auto pb-nav">
               <ConversationList activeUserId={null} />
             </div>
@@ -402,13 +591,8 @@ export default function MessagesContent() {
       <div className="hidden lg:flex h-screen overflow-hidden">
         <DesktopSidebar />
         <div className="flex-1 flex overflow-hidden border-x border-border">
-          <div className="w-72 border-r border-border flex flex-col flex-shrink-0">
-            <div className="px-4 py-3 border-b border-border flex-shrink-0">
-              <h2 className="font-bold">Messages</h2>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              <ConversationList activeUserId={withUser} />
-            </div>
+          <div className="w-[360px] border-r border-border flex flex-col flex-shrink-0 bg-bg-card/40">
+            <ConversationList activeUserId={withUser} />
           </div>
           <div className="flex-1 flex flex-col min-w-0">
             {withUser ? <ChatArea userId={withUser} /> : (
@@ -426,9 +610,14 @@ export default function MessagesContent() {
 
 // ── Conversation List ─────────────────────────────────────────
 const ConversationList = memo(function ConversationList({ activeUserId }: { activeUserId: string | null }) {
+  const [query, setQuery] = useState('')
+  const [tab, setTab] = useState<'all' | 'unread'>('all')
   const { data, isLoading, mutate } = useSWR('/api/messages/conversations', swrFetcher, {
     refreshInterval: 4000, revalidateOnFocus: true, keepPreviousData: true })
+  const { data: requestsData } = useSWR('/api/messages/requests', swrFetcher, {
+    refreshInterval: 15000, revalidateOnFocus: true })
   const conversations: any[] = (data as any)?.data || []
+  const requestCount = ((requestsData as any)?.data || []).length
 
   useEffect(() => {
     const refresh = () => { mutate() }
@@ -436,57 +625,136 @@ const ConversationList = memo(function ConversationList({ activeUserId }: { acti
     return () => window.removeEventListener('messages:refresh', refresh)
   }, [mutate])
 
-  if (isLoading) return (
-    <div className="p-4 space-y-3">
-      {[1,2,3].map(i => (
-        <div key={i} className="flex items-center gap-3 animate-pulse">
-          <div className="w-10 h-10 rounded-full bg-bg-card2" />
-          <div className="flex-1 space-y-1.5">
-            <div className="h-3 bg-bg-card2 rounded w-24" />
-            <div className="h-2.5 bg-bg-card2 rounded w-40" />
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-
-  if (!conversations.length) return (
-    <div className="p-8 text-center text-sm text-text-muted">
-      <MessageCircle size={28} className="mx-auto mb-2 opacity-30" />
-      No conversations yet
-    </div>
-  )
+  const filteredConversations = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return conversations.filter((conv: any) => {
+      if (tab === 'unread' && conv.unread_count === 0) return false
+      if (!q) return true
+      const name = `${conv.other_user?.display_name || ''} ${conv.other_user?.username || ''}`.toLowerCase()
+      const preview = `${conv.last_message?.preview || getDirectMessagePreview(conv.last_message, null)}`.toLowerCase()
+      return name.includes(q) || preview.includes(q)
+    })
+  }, [conversations, query, tab])
 
   return (
-    <div className="divide-y divide-border">
-      {conversations.map((conv: any) => (
-        <Link key={conv.other_user?.id} href={`/messages?user=${conv.other_user?.id}`}
-          className={cn("flex items-center gap-3 px-4 py-3 hover:bg-bg-card2 transition-colors",
-            activeUserId === conv.other_user?.id ? 'bg-primary-muted' : '')}>
-          <div className="relative flex-shrink-0">
-            <Avatar user={conv.other_user} size={40} />
-            {conv.unread_count > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-primary rounded-full text-[9px] text-white flex items-center justify-center font-bold border border-bg">
-                {conv.unread_count > 9 ? '9+' : conv.unread_count}
-              </span>
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold truncate">
-                {conv.other_user?.display_name || conv.other_user?.username}
-              </p>
-              <span className="text-[10px] text-text-muted flex-shrink-0 ml-2">
-                {formatChatTime(conv.last_message?.created_at)}
-              </span>
+    <div className="h-full flex flex-col">
+      <div className="sticky top-0 z-20 bg-bg/95 backdrop-blur-xl border-b border-border safe-top">
+        <div className="px-4 pt-1 pb-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[28px] font-black tracking-tight">Chats</p>
+              <p className="text-xs text-text-muted">Messenger-style inbox for your close conversations.</p>
             </div>
-            <p className={cn("text-xs truncate",
-              conv.unread_count > 0 ? 'text-text font-medium' : 'text-text-muted')}>
-              {conv.last_message?.content || (conv.last_message?.image_url ? '📷 Photo' : '')}
-            </p>
+            <Link
+              href="/messages/requests"
+              className="relative w-11 h-11 rounded-full border border-border bg-bg-card2 flex items-center justify-center text-text-muted hover:text-text hover:border-primary/40"
+            >
+              <MessageCircle size={18} />
+              {requestCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-primary text-white text-[10px] font-bold flex items-center justify-center px-1">
+                  {requestCount > 9 ? '9+' : requestCount}
+                </span>
+              )}
+            </Link>
           </div>
-        </Link>
-      ))}
+
+          <div className="relative mt-4">
+            <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search conversations"
+              className="w-full rounded-full bg-bg-card2 border border-border pl-11 pr-4 py-3 text-sm outline-none focus:border-primary transition-colors"
+            />
+          </div>
+
+          <div className="flex gap-2 mt-4 overflow-x-auto hide-scrollbar">
+            <button
+              onClick={() => setTab('all')}
+              className={cn(
+                'px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-colors',
+                tab === 'all' ? 'bg-primary/12 text-primary' : 'bg-bg-card2 text-text-secondary'
+              )}
+            >
+              Inbox
+            </button>
+            <button
+              onClick={() => setTab('unread')}
+              className={cn(
+                'px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-colors',
+                tab === 'unread' ? 'bg-primary/12 text-primary' : 'bg-bg-card2 text-text-secondary'
+              )}
+            >
+              Unread
+            </button>
+            <Link
+              href="/messages/requests"
+              className="px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap bg-bg-card2 text-text-secondary"
+            >
+              Requests{requestCount > 0 ? ` (${requestCount})` : ''}
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {isLoading ? (
+          <div className="p-4 space-y-3">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="flex items-center gap-3 animate-pulse">
+                <div className="w-12 h-12 rounded-full bg-bg-card2" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3 bg-bg-card2 rounded w-28" />
+                  <div className="h-2.5 bg-bg-card2 rounded w-40" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : filteredConversations.length === 0 ? (
+          <div className="p-8 text-center text-sm text-text-muted">
+            <MessageCircle size={28} className="mx-auto mb-2 opacity-30" />
+            {query ? 'No chats matched your search' : 'No conversations yet'}
+          </div>
+        ) : (
+          <div className="px-2 py-2 space-y-1.5">
+            {filteredConversations.map((conv: any) => (
+              <Link
+                key={conv.other_user?.id}
+                href={`/messages?user=${conv.other_user?.id}`}
+                className={cn(
+                  'flex items-center gap-3 rounded-[22px] px-3 py-3 transition-colors',
+                  activeUserId === conv.other_user?.id ? 'bg-primary/10 border border-primary/15' : 'hover:bg-bg-card2'
+                )}
+              >
+                <div className="relative flex-shrink-0">
+                  <Avatar user={conv.other_user} size={48} />
+                  {conv.unread_count > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] bg-primary rounded-full text-[10px] text-white flex items-center justify-center font-bold border border-bg px-1">
+                      {conv.unread_count > 9 ? '9+' : conv.unread_count}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold truncate">
+                      {conv.other_user?.display_name || conv.other_user?.username}
+                    </p>
+                    <span className="text-[11px] text-text-muted flex-shrink-0">
+                      {formatChatTime(conv.last_message?.created_at)}
+                    </span>
+                  </div>
+                  <p className={cn(
+                    'text-xs truncate mt-0.5',
+                    conv.unread_count > 0 ? 'text-text font-medium' : 'text-text-muted'
+                  )}>
+                    {conv.last_message?.preview || getDirectMessagePreview(conv.last_message, null)}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 })
@@ -494,20 +762,23 @@ const ConversationList = memo(function ConversationList({ activeUserId }: { acti
 // ── Chat Area ─────────────────────────────────────────────────
 function ChatArea({ userId }: { userId: string }) {
   const { profile } = useAuth()
-  const [message, setMessage]   = useState('')
-  const [sending, setSending]   = useState(false)
+  const [message, setMessage] = useState('')
+  const [sending, setSending] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [isNearBottom, setIsNearBottom] = useState(true)
-  const fileInputRef  = useRef<HTMLInputElement>(null)
-  const bottomRef     = useRef<HTMLDivElement>(null)
-  const messagesRef   = useRef<HTMLDivElement>(null)
+  const [selectedMedia, setSelectedMedia] = useState<PendingMedia[]>([])
+  const [activeMessage, setActiveMessage] = useState<any | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const messagesRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const channelRef    = useRef<any>(null)
+  const channelRef = useRef<any>(null)
+  const selectedMediaRef = useRef<PendingMedia[]>([])
   const [otherTyping, setOtherTyping] = useState(false)
-  const [myTyping, setMyTyping]       = useState(false)
+  const [myTyping, setMyTyping] = useState(false)
 
-  const chatParams  = useSearchParams()
-  const autoAnswer  = chatParams.get('action') === 'answer'
+  const chatParams = useSearchParams()
+  const autoAnswer = chatParams.get('action') === 'answer'
   const autoCallType = (chatParams.get('type') || 'audio') as 'audio' | 'video'
 
   const { data: userRes } = useSWR(`/api/users/${userId}`, swrFetcher)
@@ -515,30 +786,36 @@ function ChatArea({ userId }: { userId: string }) {
     `/api/messages/thread/${userId}`, swrFetcher,
     { revalidateOnFocus: true, refreshInterval: 2500, keepPreviousData: true }
   )
-  // Check DM permission — is this a free DM, pending request, or need request?
   const { data: permRes, mutate: mutatePermission } = useSWR(
     `/api/messages/permission?user_id=${userId}`, fetcher,
     { revalidateOnFocus: false }
   )
 
-  const otherUser  = (userRes as any)?.data
+  const otherUser = (userRes as any)?.data
   const messages: any[] = (msgsRes as any)?.data || []
   const dmPermission: string = (permRes as any)?.permission || 'free'
 
   const call = useCall(profile?.id ?? null, userId)
 
-  // Auto-trigger incoming call UI when user navigated here from push notification
+  useEffect(() => {
+    selectedMediaRef.current = selectedMedia
+  }, [selectedMedia])
+
+  useEffect(() => {
+    return () => {
+      selectedMediaRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl))
+    }
+  }, [])
+
   useEffect(() => {
     if (autoAnswer && call.callState === 'idle' && profile?.id) {
-      // Small delay so WebRTC channel is subscribed first
       const t = setTimeout(() => {
         call.setIncomingCall(autoCallType)
       }, 1000)
       return () => clearTimeout(t)
     }
-  }, [autoAnswer, profile?.id]) // eslint-disable-line
+  }, [autoAnswer, autoCallType, call.callState, profile?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Track scroll position — only auto-scroll when near bottom
   function handleScroll() {
     const el = messagesRef.current
     if (!el) return
@@ -546,42 +823,34 @@ function ChatArea({ userId }: { userId: string }) {
     setIsNearBottom(distFromBottom < 100)
   }
 
-  // Scroll to bottom on new messages — only if near bottom
   useEffect(() => {
     if (isNearBottom) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [messages.length])
+  }, [messages.length, isNearBottom])
 
-  // Initial scroll to bottom
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'instant' } as any)
   }, [userId])
 
-  // Realtime subscription — messages + typing
   useEffect(() => {
     if (!profile?.id) return
     const channelId = [profile.id, userId].sort().join('-')
 
     const channel = supabase.channel(`dm:${channelId}`)
-      // Filter: only this conversation's messages (sender_id or receiver_id = current user)
-      // Using broadcast for typing + postgres_changes for persistence
       .on('postgres_changes', {
         event: 'INSERT', schema: 'public', table: 'direct_messages',
-        filter: `receiver_id=eq.${profile.id}`,  // only receive messages TO me in this thread
+        filter: `receiver_id=eq.${profile.id}`,
       }, (payload: any) => {
-        // Only update if it's from the person we're talking to
         if (payload.new?.sender_id === userId) mutate()
       })
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'direct_messages',
         filter: `receiver_id=eq.${profile.id}`,
       }, () => mutate())
-      // Typing via Broadcast (not Presence — Presence key is random, Broadcast is reliable)
       .on('broadcast', { event: 'typing' }, ({ payload }: any) => {
         if (payload.user_id !== profile.id) {
           setOtherTyping(true)
-          // Auto-clear after 3s (in case stop event missed)
           setTimeout(() => setOtherTyping(false), 3000)
         }
       })
@@ -597,7 +866,6 @@ function ChatArea({ userId }: { userId: string }) {
     }
   }, [profile?.id, userId, mutate])
 
-  // Typing indicator
   const handleTyping = useCallback((val: string) => {
     setMessage(val)
     if (!profile?.id || !channelRef.current) return
@@ -613,93 +881,184 @@ function ChatArea({ userId }: { userId: string }) {
     }, 2000)
   }, [profile?.id, myTyping])
 
-  async function sendMessage() {
-    const content = message.trim()
-    if (!content || sending) return
-    const v = validate(sendMessageSchema, { to_user_id: userId, content })
-    if (!v.success) { toast.error(v.error); return }
+  function clearSelectedMedia() {
+    setSelectedMedia((current) => {
+      current.forEach((item) => URL.revokeObjectURL(item.previewUrl))
+      return []
+    })
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
-    setMessage('')
+  function removeSelectedMedia(id: string) {
+    setSelectedMedia((current) => {
+      const target = current.find((item) => item.id === id)
+      if (target) URL.revokeObjectURL(target.previewUrl)
+      return current.filter((item) => item.id !== id)
+    })
+  }
+
+  async function handleMediaSelection(fileList: FileList | null) {
+    if (!fileList) return
+    const nextFiles = Array.from(fileList)
+    if (selectedMedia.length + nextFiles.length > 8) {
+      toast.error('You can send up to 8 photos or videos at once')
+    }
+
+    const limited = nextFiles.slice(0, Math.max(0, 8 - selectedMedia.length))
+    if (!limited.length) return
+
+    const { validateVideo } = await import('@/lib/media')
+    const nextItems: PendingMedia[] = []
+
+    for (const file of limited) {
+      if (file.type.startsWith('image/')) {
+        nextItems.push({
+          id: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+          type: 'image',
+        })
+        continue
+      }
+
+      if (file.type.startsWith('video/')) {
+        const valid = await validateVideo(file)
+        if (!valid.ok) {
+          toast.error(valid.error || 'Invalid video file')
+          continue
+        }
+        nextItems.push({
+          id: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+          type: 'video',
+        })
+        continue
+      }
+
+      toast.error(`Unsupported file: ${file.name}`)
+    }
+
+    setSelectedMedia((current) => [...current, ...nextItems])
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  async function sendCurrentMessage(overrideText?: string) {
+    const content = overrideText ?? message.trim()
+    if ((!content && selectedMedia.length === 0) || sending || uploading) return
+
     setSending(true)
+    setUploading(selectedMedia.length > 0)
+    const previousText = message
+    const previousMedia = selectedMedia
+    setMessage('')
     channelRef.current?.send({ type: 'broadcast', event: 'stop-typing', payload: { user_id: profile?.id } })
 
     try {
-      await api.post('/api/messages/send', { to_user_id: userId, content }, { requireAuth: true })
+      const { compressImage } = await import('@/lib/media')
+      const attachments: Array<{ type: 'image' | 'video'; url: string; thumbnail_url?: string | null }> = []
+
+      for (const item of previousMedia) {
+        let fileToUpload = item.file
+        if (item.type === 'image' && !item.file.type.includes('gif')) {
+          try {
+            const compressed = await compressImage(item.file)
+            fileToUpload = compressed.file
+          } catch {}
+        }
+
+        const uploadResult = await uploadToImageKit(fileToUpload, item.type === 'video' ? 'videos' : 'images')
+        attachments.push({
+          type: item.type,
+          url: uploadResult.url,
+          thumbnail_url: item.type === 'video' ? (uploadResult.thumbnailUrl || null) : null,
+        })
+      }
+
+      const payload = {
+        to_user_id: userId,
+        content,
+        attachments,
+      }
+
+      const validation = validate(sendMessageSchema, payload)
+      if (!validation.success) {
+        toast.error(validation.error)
+        setMessage(previousText)
+        setSelectedMedia(previousMedia)
+        return
+      }
+
+      await api.post('/api/messages/send', payload, { requireAuth: true, timeout: 45000 })
       analytics.track('message_send')
       mutate()
       window.dispatchEvent(new Event('messages:refresh'))
+      clearSelectedMedia()
     } catch (e: any) {
       const code = e?.response?.data?.code || e?.code
       if (code === 'REQUEST_REQUIRED') {
         toast.error('Follow or send a message request first', { duration: 4000 })
-        mutatePermission()  // refresh permission state
+        mutatePermission()
       } else if (code === 'REQUEST_PENDING') {
         toast('Your message request is pending their approval ⏳', { duration: 4000 })
+      } else if (code === 'MESSAGING_SQL_REQUIRED') {
+        toast.error('Run the latest messaging SQL migration first')
       } else {
         toast.error(getErrorMessage(e))
-        setMessage(content)
       }
+      setMessage(previousText)
+      setSelectedMedia(previousMedia)
     } finally {
       setSending(false)
-    }
-  }
-
-  async function sendImage(file: File) {
-    if (!file || sending || uploading) return
-    setUploading(true)
-    try {
-      const result = await uploadToImageKit(file, 'images')
-      if (!result?.url) throw new Error('Upload failed')
-      await api.post('/api/messages/send', {
-        to_user_id: userId,
-        content: '',
-        image_url: result.url,
-      }, { requireAuth: true, timeout: 30000 })
-      analytics.track('message_send')
-      mutate()
-      window.dispatchEvent(new Event('messages:refresh'))
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    } catch (e: any) {
-      toast.error(getErrorMessage(e))
-    } finally {
       setUploading(false)
     }
   }
 
-
-  async function deleteMessage(msgId: string) {
+  async function deleteMessage(messageId: string, scope: 'me' | 'everyone') {
     try {
-      await fetch('/api/messages/send', {
-        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message_id: msgId })
+      await apiFetch('/api/messages/send', {
+        method: 'DELETE',
+        body: JSON.stringify({
+          message_id: messageId,
+          scope,
+        }),
+        requireAuth: true,
       })
       mutate()
-    } catch { toast.error('Failed to delete') }
+      window.dispatchEvent(new Event('messages:refresh'))
+      setActiveMessage(null)
+      toast.success(scope === 'everyone' ? 'Message removed for everyone' : 'Message removed for you')
+    } catch (e) {
+      toast.error(getErrorMessage(e))
+    }
   }
 
+  const composerEnabled = dmPermission === 'free' || dmPermission === 'request_accepted'
+  const hasComposerContent = Boolean(message.trim() || selectedMedia.length > 0)
+
   return (
-    <div className="flex flex-col h-full relative">
-      {/* Call overlay */}
+    <div className="flex flex-col h-full relative bg-bg">
       <CallOverlay call={call} otherUser={otherUser} />
 
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-border flex items-center gap-3 flex-shrink-0 bg-bg">
+      <div className="px-4 py-3 border-b border-border flex items-center gap-3 flex-shrink-0 bg-bg/95 backdrop-blur-xl">
         <Link href="/messages" className="text-text-muted hover:text-text transition-colors flex-shrink-0 lg:hidden">
           <ArrowLeft size={20} />
         </Link>
         {otherUser ? (
           <>
-            <Avatar user={otherUser} size={36} />
+            <Avatar user={otherUser} size={42} />
             <div className="flex-1 min-w-0">
               <div className="font-semibold text-sm truncate">
                 {otherUser.display_name || otherUser.full_name || otherUser.username}
               </div>
-              {otherTyping
-                ? <div className="text-xs text-primary animate-pulse">typing…</div>
-                : <div className="text-xs text-text-muted">@{otherUser.username}</div>
-              }
+              {otherTyping ? (
+                <div className="text-xs text-primary animate-pulse">typing…</div>
+              ) : (
+                <div className="text-xs text-text-muted">
+                  {dmPermission === 'free' ? 'You can message freely' : `@${otherUser.username}`}
+                </div>
+              )}
             </div>
-            {/* Call buttons — only visible when mutual follow */}
             <div className="flex items-center gap-2 flex-shrink-0">
               <button
                 onClick={() => {
@@ -710,12 +1069,13 @@ function ChatArea({ userId }: { userId: string }) {
                   call.startCall('audio')
                 }}
                 disabled={call.callState !== 'idle'}
-                className={cn("w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-40",
+                className={cn(
+                  'w-10 h-10 rounded-full flex items-center justify-center transition-colors disabled:opacity-40',
                   dmPermission === 'free'
-                    ? "bg-bg-card2 text-text-muted hover:text-primary hover:bg-primary-muted"
-                    : "bg-bg-card2 text-text-muted/40 cursor-not-allowed"
+                    ? 'bg-bg-card2 text-text-muted hover:text-primary hover:bg-primary-muted'
+                    : 'bg-bg-card2 text-text-muted/40 cursor-not-allowed'
                 )}
-                title={dmPermission === 'free' ? "Audio call" : "Follow each other to call"}>
+              >
                 <Phone size={16} />
               </button>
               <button
@@ -727,16 +1087,17 @@ function ChatArea({ userId }: { userId: string }) {
                   call.startCall('video')
                 }}
                 disabled={call.callState !== 'idle'}
-                className={cn("w-8 h-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-40",
+                className={cn(
+                  'w-10 h-10 rounded-full flex items-center justify-center transition-colors disabled:opacity-40',
                   dmPermission === 'free'
-                    ? "bg-bg-card2 text-text-muted hover:text-primary hover:bg-primary-muted"
-                    : "bg-bg-card2 text-text-muted/40 cursor-not-allowed"
+                    ? 'bg-bg-card2 text-text-muted hover:text-primary hover:bg-primary-muted'
+                    : 'bg-bg-card2 text-text-muted/40 cursor-not-allowed'
                 )}
-                title={dmPermission === 'free' ? "Video call" : "Follow each other to call"}>
+              >
                 <Video size={16} />
               </button>
               <Link href={`/profile/${otherUser.id}`}
-                className="w-8 h-8 rounded-full bg-bg-card2 flex items-center justify-center text-text-muted hover:text-text transition-colors"
+                className="w-10 h-10 rounded-full bg-bg-card2 flex items-center justify-center text-text-muted hover:text-text transition-colors"
                 title="View profile">
                 <MoreVertical size={16} />
               </Link>
@@ -747,64 +1108,114 @@ function ChatArea({ userId }: { userId: string }) {
         )}
       </div>
 
-      {/* Messages */}
-      <div ref={messagesRef} onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-3 hide-scrollbar">
+      <div
+        ref={messagesRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-4 py-5 hide-scrollbar bg-[radial-gradient(circle_at_top,_rgba(108,99,255,0.06),_transparent_40%)]"
+      >
+        {otherUser && (
+          <div className="flex flex-col items-center text-center px-6 py-5 mb-5">
+            <Avatar user={otherUser} size={72} />
+            <p className="mt-3 font-semibold">{otherUser.display_name || otherUser.username}</p>
+            <p className="text-xs text-text-muted mt-1">@{otherUser.username}</p>
+            <Link href={`/profile/${otherUser.id}`} className="text-xs text-primary mt-2">
+              View profile
+            </Link>
+          </div>
+        )}
+
         {messages.length === 0 ? (
-          <div className="text-center py-8 text-text-muted text-sm">Say hello! 👋</div>
-        ) : messages.map((msg: any) => {
+          <div className="text-center py-10 text-text-muted text-sm">Say hello! 👋</div>
+        ) : messages.map((msg: any, index: number) => {
           const isMine = msg.sender_id === profile?.id
-          if (msg.content === 'Message deleted') return (
-            <div key={msg.id} className={cn("flex gap-2", isMine ? "flex-row-reverse" : "")}>
-              <p className="text-xs text-text-muted italic px-3 py-1.5">Message deleted</p>
-            </div>
-          )
+          const attachments = normalizeDirectMessageAttachments(msg)
+          const showDay = index === 0 || formatDayLabel(messages[index - 1]?.created_at) !== formatDayLabel(msg.created_at)
+          const deletedForEveryone = isDirectMessageDeletedForEveryone(msg) || msg.content === 'Message deleted'
+          const previewText = deletedForEveryone
+            ? (isMine ? 'You removed a message' : 'Message removed')
+            : msg.content
+
           return (
-            <div key={msg.id}
-              className={cn("flex gap-2 items-end group", isMine ? "flex-row-reverse" : "")}>
-              {!isMine && <Avatar user={msg.sender} size={28} className="flex-shrink-0 mb-1" />}
-              <div className={cn(
-                "max-w-[72%] px-3 py-2 rounded-2xl text-sm leading-relaxed break-words",
-                isMine ? "bg-primary text-white rounded-tr-sm" : "bg-bg-card2 text-text rounded-tl-sm border border-border"
-              )}>
-                {msg.image_url && (
-                  <a href={msg.image_url} target="_blank" rel="noreferrer" className="block mb-2">
-                    <img
-                      src={getImageKitUrl(msg.image_url, { w: 800, q: 80 })}
-                      alt="Message attachment"
-                      className="max-h-72 rounded-xl object-cover"
-                    />
-                  </a>
-                )}
-                {msg.content ? <p>{msg.content}</p> : msg.image_url ? <p className={cn('text-xs', isMine ? 'text-white/70' : 'text-text-muted')}>📷 Photo</p> : null}
-                <div className={cn("flex items-center justify-end gap-1 text-[10px] mt-0.5",
-                  isMine ? "text-white/60" : "text-text-muted")}>
-                  <span>{formatChatTime(msg.created_at)}</span>
-                  {isMine && (msg.is_read
-                    ? <CheckCheck size={11} className="text-accent-green" />
-                    : <Check size={11} />)}
+            <div key={msg.id} className="mb-3">
+              {showDay && (
+                <div className="flex justify-center mb-4">
+                  <span className="px-3 py-1 rounded-full bg-bg-card2 border border-border text-[11px] text-text-muted">
+                    {formatDayLabel(msg.created_at)}
+                  </span>
                 </div>
-              </div>
-              {/* Delete button on hover */}
-              {isMine && (
-                <button onClick={() => deleteMessage(msg.id)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-text-muted hover:text-accent-red p-1">
-                  <Trash2 size={12} />
-                </button>
               )}
+
+              <div className={cn('flex gap-2 items-end group', isMine ? 'justify-end' : 'justify-start')}>
+                {!isMine && <Avatar user={msg.sender} size={28} className="flex-shrink-0 mb-1" />}
+
+                {!isMine && (
+                  <button
+                    onClick={() => setActiveMessage(msg)}
+                    className="self-center opacity-60 lg:opacity-0 lg:group-hover:opacity-100 text-text-muted hover:text-text transition-opacity"
+                  >
+                    <MoreHorizontal size={16} />
+                  </button>
+                )}
+
+                <div className={cn('max-w-[84%] sm:max-w-[74%]')}>
+                  <div
+                    className={cn(
+                      'rounded-[24px] px-3 py-2.5 shadow-sm',
+                      isMine ? 'bg-primary text-white rounded-br-[10px]' : 'bg-bg-card border border-border text-text rounded-bl-[10px]'
+                    )}
+                  >
+                    {!deletedForEveryone && attachments.length > 0 && (
+                      <MessageAttachments attachments={attachments} isMine={isMine} />
+                    )}
+
+                    {previewText ? (
+                      <p className={cn('text-sm leading-relaxed whitespace-pre-wrap break-words', deletedForEveryone && 'italic opacity-80')}>
+                        {previewText}
+                      </p>
+                    ) : null}
+
+                    {!previewText && !attachments.length && (
+                      <p className={cn('text-sm italic opacity-80')}>
+                        {deletedForEveryone ? 'Message removed' : 'Attachment'}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className={cn(
+                    'flex items-center gap-1.5 text-[10px] mt-1 px-1',
+                    isMine ? 'justify-end text-text-muted' : 'justify-start text-text-muted'
+                  )}>
+                    <span>{formatChatTime(msg.created_at)}</span>
+                    {isMine && !deletedForEveryone && (
+                      msg.is_read ? <CheckCheck size={11} className="text-accent-green" /> : <Check size={11} />
+                    )}
+                  </div>
+                </div>
+
+                {isMine && (
+                  <button
+                    onClick={() => setActiveMessage(msg)}
+                    className="self-center opacity-60 lg:opacity-0 lg:group-hover:opacity-100 text-text-muted hover:text-text transition-opacity"
+                  >
+                    <MoreHorizontal size={16} />
+                  </button>
+                )}
+              </div>
             </div>
           )
         })}
 
-        {/* Typing indicator */}
         {otherTyping && (
-          <div className="flex gap-2 items-end">
+          <div className="flex gap-2 items-end mt-3">
             <Avatar user={otherUser} size={28} className="flex-shrink-0 mb-1" />
-            <div className="bg-bg-card2 border border-border rounded-2xl rounded-tl-sm px-4 py-2.5">
+            <div className="bg-bg-card border border-border rounded-[22px] rounded-bl-[10px] px-4 py-2.5">
               <div className="flex gap-1 items-center">
-                {[0,1,2].map(i => (
-                  <div key={i} className="w-1.5 h-1.5 rounded-full bg-text-muted animate-bounce"
-                    style={{ animationDelay: `${i * 0.15}s` }} />
+                {[0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className="w-1.5 h-1.5 rounded-full bg-text-muted animate-bounce"
+                    style={{ animationDelay: `${i * 0.15}s` }}
+                  />
                 ))}
               </div>
             </div>
@@ -813,21 +1224,17 @@ function ChatArea({ userId }: { userId: string }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* New message nudge when not at bottom */}
       {!isNearBottom && messages.length > 0 && (
-        <button onClick={() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' })}
-          className="absolute bottom-20 right-4 bg-primary text-white text-xs px-3 py-1.5 rounded-full shadow-lg">
+        <button
+          onClick={() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' })}
+          className="absolute bottom-28 right-4 bg-primary text-white text-xs px-3 py-1.5 rounded-full shadow-lg"
+        >
           ↓ New messages
         </button>
       )}
 
-      {/* Input — varies by permission state */}
       {dmPermission === 'request_needed' ? (
-        <MessageRequestBox
-          otherUser={otherUser}
-          userId={userId}
-          onSent={() => mutatePermission()}
-        />
+        <MessageRequestBox otherUser={otherUser} userId={userId} onSent={() => mutatePermission()} />
       ) : dmPermission === 'request_pending' ? (
         <div className="px-4 py-4 border-t border-border bg-bg text-center">
           <p className="text-sm text-text-muted">⏳ Message request pending</p>
@@ -838,36 +1245,92 @@ function ChatArea({ userId }: { userId: string }) {
           <p className="text-sm text-text-muted">🚫 Cannot send messages to this user</p>
         </div>
       ) : (
-        <div className="px-4 py-3 border-t border-border flex items-center gap-2 flex-shrink-0 bg-bg">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={e => { const file = e.target.files?.[0]; if (file) sendImage(file) }}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={sending || uploading}
-            className="w-9 h-9 rounded-full bg-bg-card2 border border-border disabled:opacity-40 flex items-center justify-center text-text-muted hover:text-primary transition-all flex-shrink-0"
-            title="Send photo"
-          >
-            {uploading ? <Loader2 size={14} className="animate-spin" /> : <ImageIcon size={16} />}
-          </button>
-          <input
-            value={message}
-            onChange={e => handleTyping(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-            placeholder={uploading ? "Uploading photo..." : "Message…"}
-            maxLength={1000}
-            className="flex-1 bg-bg-card2 border border-border rounded-full px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors placeholder:text-text-muted"
-          />
-          <button onClick={sendMessage} disabled={!message.trim() || sending || uploading}
-            className="w-9 h-9 rounded-full bg-primary disabled:opacity-40 flex items-center justify-center text-white active:scale-95 transition-all flex-shrink-0">
-            {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-          </button>
+        <div className="border-t border-border bg-bg/95 backdrop-blur-xl px-4 py-3">
+          {selectedMedia.length > 0 && (
+            <div className="mb-3 flex gap-2 overflow-x-auto hide-scrollbar">
+              {selectedMedia.map((item) => (
+                <div key={item.id} className="relative w-24 h-24 rounded-[18px] overflow-hidden border border-border bg-bg-card2 flex-shrink-0">
+                  {item.type === 'video' ? (
+                    <video src={item.previewUrl} className="w-full h-full object-cover" muted playsInline />
+                  ) : (
+                    <img src={item.previewUrl} alt="" className="w-full h-full object-cover" />
+                  )}
+                  <button
+                    onClick={() => removeSelectedMedia(item.id)}
+                    className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/60 text-white flex items-center justify-center"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-end gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              className="hidden"
+              onChange={(event) => handleMediaSelection(event.target.files)}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={sending || uploading || !composerEnabled}
+              className="w-11 h-11 rounded-full bg-bg-card2 border border-border disabled:opacity-40 flex items-center justify-center text-text-muted hover:text-primary transition-all flex-shrink-0"
+              title="Add photos or videos"
+            >
+              {uploading ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={18} />}
+            </button>
+
+            <div className="flex-1 rounded-[28px] bg-bg-card2 border border-border px-3 py-2 flex items-end gap-2">
+              <button
+                onClick={() => handleTyping(`${message}${message ? ' ' : ''}😊`)}
+                disabled={sending || uploading || !composerEnabled}
+                className="w-9 h-9 rounded-full flex items-center justify-center text-text-muted hover:text-primary transition-colors flex-shrink-0"
+                title="Add emoji"
+              >
+                <Smile size={18} />
+              </button>
+
+              <textarea
+                value={message}
+                onChange={(event) => handleTyping(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault()
+                    sendCurrentMessage()
+                  }
+                }}
+                placeholder={uploading ? 'Uploading attachments...' : 'Aa'}
+                rows={1}
+                maxLength={1000}
+                className="flex-1 bg-transparent text-sm outline-none resize-none max-h-32 py-2 leading-5 placeholder:text-text-muted"
+              />
+            </div>
+
+            <button
+              onClick={() => hasComposerContent ? sendCurrentMessage() : sendCurrentMessage('👍')}
+              disabled={sending || uploading || !composerEnabled}
+              className={cn(
+                'w-11 h-11 rounded-full flex items-center justify-center text-white transition-all flex-shrink-0',
+                hasComposerContent ? 'bg-primary' : 'bg-primary/90'
+              )}
+              title={hasComposerContent ? 'Send message' : 'Quick like'}
+            >
+              {sending ? <Loader2 size={16} className="animate-spin" /> : hasComposerContent ? <Send size={16} /> : <ThumbsUp size={18} />}
+            </button>
+          </div>
         </div>
       )}
+
+      <MessageActionsSheet
+        message={activeMessage}
+        currentUserId={profile?.id}
+        onClose={() => setActiveMessage(null)}
+        onDelete={(scope) => deleteMessage(activeMessage?.id, scope)}
+      />
     </div>
   )
 }

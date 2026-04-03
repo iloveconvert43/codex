@@ -1,8 +1,8 @@
 /** @type {import('next').NextConfig} */
 const withPWA = require('@ducanh2912/next-pwa').default({
   dest: 'public',
-  cacheOnFrontEndNav: true,
-  aggressiveFrontEndNavCaching: true,
+  cacheOnFrontEndNav: false,
+  aggressiveFrontEndNavCaching: false,
   reloadOnOnline: true,
   disable: process.env.NODE_ENV === 'development',
   // Import custom service worker for call notifications
@@ -13,9 +13,8 @@ const withPWA = require('@ducanh2912/next-pwa').default({
     importScripts: ['/sw-call.js'],
     runtimeCaching: [
       {
-        urlPattern: /^\/api\/feed/,
-        handler: 'NetworkFirst',
-        options: { cacheName: 'feed-cache', expiration: { maxEntries: 5, maxAgeSeconds: 300 } },
+        urlPattern: /^\/api\//,
+        handler: 'NetworkOnly',
       },
       {
         urlPattern: /\.(js|css|woff2?)$/,
@@ -76,6 +75,10 @@ const nextConfig = {
       {
         source: '/_next/static/(.*)',
         headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
+      {
+        source: '/api/:path*',
+        headers: [{ key: 'Cache-Control', value: 'no-store, no-cache, must-revalidate, max-age=0' }],
       },
     ]
   },

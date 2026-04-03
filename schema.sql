@@ -789,8 +789,26 @@ CREATE TABLE comment_likes (
   PRIMARY KEY (comment_id, user_id)
 );
 ALTER TABLE comments ADD COLUMN IF NOT EXISTS like_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS dislike_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE comments ADD COLUMN IF NOT EXISTS mentions TEXT[] DEFAULT '{}'; -- user_ids mentioned
-CREATE INDEX idx_comment_likes ON comment_likes(comment_id);
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS image_url TEXT;
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS video_url TEXT;
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS video_thumbnail_url TEXT;
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS gif_url TEXT;
+ALTER TABLE comment_likes ADD COLUMN IF NOT EXISTS reaction TEXT NOT NULL DEFAULT 'like';
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'comment_likes_reaction_check'
+  ) THEN
+    ALTER TABLE comment_likes
+      ADD CONSTRAINT comment_likes_reaction_check
+      CHECK (reaction IN ('like', 'dislike'));
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_comment_likes ON comment_likes(comment_id);
+CREATE INDEX IF NOT EXISTS idx_comment_likes_reaction ON comment_likes(comment_id, reaction);
 ALTER TABLE comment_likes ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "comment_likes_all" ON comment_likes FOR ALL 
   USING (user_id = (SELECT id FROM users WHERE auth_id = auth.uid()));
@@ -941,27 +959,86 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- ── HELPER: Comment like toggle ─────────────────────────────
+-- ── HELPER: Comment reaction toggle ─────────────────────────
+CREATE OR REPLACE FUNCTION toggle_comment_reaction(
+  p_comment_id UUID,
+  p_user_id UUID,
+  p_reaction TEXT
+) RETURNS TABLE(reaction TEXT, like_count INTEGER, dislike_count INTEGER) AS $$
+DECLARE
+  v_existing_reaction TEXT;
+BEGIN
+  IF p_reaction NOT IN ('like', 'dislike') THEN
+    RAISE EXCEPTION 'Invalid reaction type';
+  END IF;
+
+  SELECT cl.reaction
+  INTO v_existing_reaction
+  FROM comment_likes cl
+  WHERE cl.comment_id = p_comment_id AND cl.user_id = p_user_id;
+
+  IF v_existing_reaction IS NULL THEN
+    INSERT INTO comment_likes(comment_id, user_id, reaction)
+    VALUES (p_comment_id, p_user_id, p_reaction);
+
+    IF p_reaction = 'like' THEN
+      UPDATE comments SET like_count = like_count + 1 WHERE id = p_comment_id;
+    ELSE
+      UPDATE comments SET dislike_count = dislike_count + 1 WHERE id = p_comment_id;
+    END IF;
+
+    reaction := p_reaction;
+  ELSIF v_existing_reaction = p_reaction THEN
+    DELETE FROM comment_likes
+    WHERE comment_id = p_comment_id AND user_id = p_user_id;
+
+    IF p_reaction = 'like' THEN
+      UPDATE comments SET like_count = GREATEST(0, like_count - 1) WHERE id = p_comment_id;
+    ELSE
+      UPDATE comments SET dislike_count = GREATEST(0, dislike_count - 1) WHERE id = p_comment_id;
+    END IF;
+
+    reaction := NULL;
+  ELSE
+    UPDATE comment_likes
+    SET reaction = p_reaction, created_at = NOW()
+    WHERE comment_id = p_comment_id AND user_id = p_user_id;
+
+    IF p_reaction = 'like' THEN
+      UPDATE comments
+      SET like_count = like_count + 1,
+          dislike_count = GREATEST(0, dislike_count - 1)
+      WHERE id = p_comment_id;
+    ELSE
+      UPDATE comments
+      SET like_count = GREATEST(0, like_count - 1),
+          dislike_count = dislike_count + 1
+      WHERE id = p_comment_id;
+    END IF;
+
+    reaction := p_reaction;
+  END IF;
+
+  SELECT c.like_count, c.dislike_count
+  INTO like_count, dislike_count
+  FROM comments c
+  WHERE c.id = p_comment_id;
+
+  RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ── HELPER: Legacy comment like toggle ─────────────────────
 CREATE OR REPLACE FUNCTION toggle_comment_like(p_comment_id UUID, p_user_id UUID)
 RETURNS TABLE(liked BOOLEAN, like_count INTEGER) AS $$
 DECLARE
-  v_exists BOOLEAN;
+  v_result RECORD;
 BEGIN
-  SELECT EXISTS(
-    SELECT 1 FROM comment_likes WHERE comment_id = p_comment_id AND user_id = p_user_id
-  ) INTO v_exists;
+  SELECT * INTO v_result
+  FROM toggle_comment_reaction(p_comment_id, p_user_id, 'like');
 
-  IF v_exists THEN
-    DELETE FROM comment_likes WHERE comment_id = p_comment_id AND user_id = p_user_id;
-    UPDATE comments SET like_count = GREATEST(0, like_count - 1) WHERE id = p_comment_id;
-    liked := FALSE;
-  ELSE
-    INSERT INTO comment_likes(comment_id, user_id) VALUES (p_comment_id, p_user_id);
-    UPDATE comments SET like_count = like_count + 1 WHERE id = p_comment_id;
-    liked := TRUE;
-  END IF;
-
-  SELECT c.like_count INTO like_count FROM comments c WHERE c.id = p_comment_id;
+  liked := v_result.reaction = 'like';
+  like_count := v_result.like_count;
   RETURN NEXT;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

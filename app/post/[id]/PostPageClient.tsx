@@ -18,6 +18,8 @@ import { PostSkeleton } from '@/components/ui/Skeleton'
 import toast from 'react-hot-toast'
 import { analytics } from '@/lib/analytics'
 import type { Comment } from '@/types'
+import { usePendingPost } from '@/hooks/usePendingPosts'
+import { removePendingPost } from '@/lib/pendingPosts'
 
 export default function PostPageClient({ id }: { id: string }) {
 
@@ -58,6 +60,7 @@ export default function PostPageClient({ id }: { id: string }) {
 function PostContent({ postId }: { postId: string }) {
   const { profile, isLoggedIn } = useAuth()
   const router = useRouter()
+  const pendingPost = usePendingPost(postId)
 
   const { data: postData, isLoading: postLoading, error: postError, mutate: mutatePost } = useSWR(
     `/api/posts/${postId}`,
@@ -65,7 +68,7 @@ function PostContent({ postId }: { postId: string }) {
     { revalidateOnFocus: true, errorRetryCount: 3, errorRetryInterval: 2000, dedupingInterval: 1000 }
   )
   const { data: commentsData, mutate: mutateComments } = useSWR(
-    postData?.data ? `/api/posts/${postId}/comments` : null, // only fetch comments if post loaded
+    (postData?.data || pendingPost) ? `/api/posts/${postId}/comments` : null,
     fetcher
   )
 
@@ -74,8 +77,13 @@ function PostContent({ postId }: { postId: string }) {
   const [loading, setLoading] = useState(false)
   const [manualRetries, setManualRetries] = useState(0)
 
-  const post = postData?.data ?? null
+  const post = postData?.data ?? pendingPost ?? null
   const comments: Comment[] = commentsData?.data || []
+
+  useEffect(() => {
+    if (!postData?.data?.id) return
+    removePendingPost(postData.data.id)
+  }, [postData?.data?.id])
 
   // Signal: opening a post detail = strong positive intent (weight 1.5)
   useEffect(() => {
@@ -110,11 +118,13 @@ function PostContent({ postId }: { postId: string }) {
     if (!confirm('Delete this post? This cannot be undone.')) return
     try {
       await api.post('/api/upload/delete', { post_id: postId }, { requireAuth: true })
+      removePendingPost(postId)
       toast.success('Post deleted')
       router.push('/')
     } catch {
       try {
         await api.delete(`/api/posts/${postId}`, { requireAuth: true })
+        removePendingPost(postId)
         toast.success('Post deleted')
         router.push('/')
       } catch (err) {
@@ -123,8 +133,8 @@ function PostContent({ postId }: { postId: string }) {
     }
   }
 
-  if (postLoading) return <PostSkeleton />
-  if (postError || !post) {
+  if (postLoading && !pendingPost) return <PostSkeleton />
+  if ((postError || !post) && !pendingPost) {
     const errMsg = postError?.message || postError?.toString() || ''
     const is401 = errMsg.includes('401') || errMsg.includes('expired') || errMsg.includes('Unauthorized')
     const isTimeout = errMsg.includes('timed out') || errMsg.includes('408') || errMsg.includes('TIMEOUT')

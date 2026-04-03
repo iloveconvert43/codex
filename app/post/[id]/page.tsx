@@ -12,14 +12,22 @@ export async function generateMetadata(
     const supabase = createServerComponentClient({ cookies })
     const { data: post } = await supabase
       .from('posts')
-      .select('content, image_url, is_mystery, is_anonymous, user:users(display_name, username)')
+      .select('content, image_url, is_mystery, is_anonymous, user_id')
       .eq('id', params.id)
-      .single()
+      .maybeSingle()
 
     if (!post) return { title: 'Post | tryHushly' }
 
+    const { data: user } = post.user_id
+      ? await supabase
+          .from('users')
+          .select('display_name, username')
+          .eq('id', post.user_id)
+          .maybeSingle()
+      : { data: null as any }
+
     const isAnon = post.is_anonymous
-    const author = isAnon ? 'Anonymous' : ((post.user as any)?.display_name || (post.user as any)?.username || 'Someone')
+    const author = isAnon ? 'Anonymous' : (user?.display_name || user?.username || 'Someone')
     const content = post.is_mystery ? '🎭 Mystery post — tap to reveal' : (post.content || '')
     const title = `${author} on tryHushly`
 

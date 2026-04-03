@@ -55,9 +55,10 @@ export const createCommentSchema = z.object({
 
 // ── Messages ──────────────────────────────────────────────
 const messageAttachmentSchema = z.object({
-  type: z.enum(['image', 'video']),
+  type: z.enum(['image', 'video', 'audio']),
   url: z.string().url(),
   thumbnail_url: z.string().url().nullable().optional(),
+  duration_sec: z.number().min(0).max(600).nullable().optional(),
 })
 
 export const sendMessageSchema = z.object({

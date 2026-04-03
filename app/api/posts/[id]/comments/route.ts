@@ -23,12 +23,11 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   try {
     // Use admin client to bypass RLS for reading comments (public content)
     const admin = createAdminClient()
-    const userSelect = 'id,username,full_name,display_name,avatar_url,is_verified'
 
     // Fetch ALL non-deleted comments for this post in one query
     const { data: allComments, error } = await admin
       .from('comments')
-      .select(`*, user:users(${userSelect})`)
+      .select('*')
       .eq('post_id', params.id)
       .eq('is_deleted', false)
       .order('created_at', { ascending: true })
@@ -36,16 +35,26 @@ export async function GET(req: NextRequest, { params }: Ctx) {
 
     if (error) throw error
 
+    const userIds = Array.from(new Set((allComments || []).map((comment: any) => comment.user_id).filter(Boolean)))
+    const { data: users } = userIds.length
+      ? await admin
+          .from('users')
+          .select('id, username, full_name, display_name, avatar_url, is_verified')
+          .in('id', userIds)
+      : { data: [] as any[] }
+    const userMap = new Map((users || []).map((user: any) => [user.id, user]))
+
     // Build tree: separate top-level and replies
     const topLevel: any[] = []
     const replyMap: Record<string, any[]> = {}
 
     for (const c of (allComments || [])) {
+      const enrichedComment = { ...c, user: userMap.get(c.user_id) || null }
       if (!c.parent_id) {
-        topLevel.push({ ...c, replies: [] })
+        topLevel.push({ ...enrichedComment, replies: [] })
       } else {
         if (!replyMap[c.parent_id]) replyMap[c.parent_id] = []
-        replyMap[c.parent_id].push(c)
+        replyMap[c.parent_id].push(enrichedComment)
       }
     }
 
@@ -54,7 +63,9 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       ...c,
       replies: replyMap[c.id] || [] }))
 
-    return NextResponse.json({ data: withReplies })
+    const res = NextResponse.json({ data: withReplies })
+    res.headers.set('Cache-Control', 'no-store')
+    return res
   } catch (err: any) {
     console.error('[comments GET]', err.message)
     return NextResponse.json({ error: 'Failed to load comments' }, { status: 500 })
@@ -112,10 +123,16 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         content,
         parent_id: parent_id || null,
         is_anonymous: !!is_anonymous })
-      .select(`*, user:users(id,username,full_name,display_name,avatar_url,is_verified)`)
+      .select('*')
       .single()
 
     if (error) throw error
+
+    const { data: user } = await admin
+      .from('users')
+      .select('id, username, full_name, display_name, avatar_url, is_verified')
+      .eq('id', profile.id)
+      .maybeSingle()
 
     // Notify post owner (non-blocking, skip self-notifications)
     const { data: post } = await admin
@@ -168,7 +185,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       }
     }).catch(() => {})
 
-  return NextResponse.json({ data: { ...comment, replies: [] } }, { status: 201 })
+  const res = NextResponse.json({ data: { ...comment, user, replies: [] } }, { status: 201 })
+  res.headers.set('Cache-Control', 'no-store')
+  return res
   } catch (err: any) {
     console.error('[comments POST]', err.message)
     return NextResponse.json({ error: 'Failed to post comment' }, { status: 500 })

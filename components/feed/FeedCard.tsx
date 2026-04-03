@@ -18,6 +18,21 @@ import { getOptimizedUrl, getLQIPUrl } from '@/lib/imagekit'
 import type { Post, ReactionType } from '@/types'
 import { removePendingPost } from '@/lib/pendingPosts'
 
+const EMPTY_REACTION_COUNTS: Record<ReactionType, number> = {
+  interesting: 0,
+  funny: 0,
+  deep: 0,
+  curious: 0,
+}
+
+function buildReactionCounts(post: Post, liveReactionCounts?: Record<string, number>) {
+  return {
+    ...EMPTY_REACTION_COUNTS,
+    ...(post.reaction_counts || {}),
+    ...((liveReactionCounts as Record<ReactionType, number> | undefined) || {}),
+  }
+}
+
 // ── Progressive Image — LQIP blur-up (Facebook-style) ──────────
 const ProgressiveImage = memo(function ProgressiveImage({ src, alt, priority, className }: {
   src: string; alt: string; priority?: boolean; className?: string
@@ -55,13 +70,25 @@ const ProgressiveImage = memo(function ProgressiveImage({ src, alt, priority, cl
   )
 })
 
-const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: Post; onReshare?: (post: Post) => void; priority?: boolean }) {
+const FeedCard = memo(function FeedCard({
+  post,
+  onReshare,
+  priority,
+  showLatestCommentPreview = true,
+}: {
+  post: Post
+  onReshare?: (post: Post) => void
+  priority?: boolean
+  showLatestCommentPreview?: boolean
+}) {
   const { isLoggedIn, profile } = useAuth()
   // Live reaction + comment counts (realtime from DB triggers)
   const liveCounts = useRealtimePostCounts(post.id, {
     reaction_count: Object.values(post.reaction_counts || {}).reduce((a: any, b: any) => a + b, 0),
     comment_count: post.comment_count ?? 0,
-  })
+    reaction_counts: post.reaction_counts,
+    latest_comment: post.latest_comment ?? null,
+  }, { fallbackPollMs: 8000 })
   const router = useRouter()
   const cardRef = useRef<HTMLDivElement>(null)
   const { trackPostVisibility, trackReact, trackReveal, trackTagTap, trackHide } = useInteractionTracker()
@@ -74,6 +101,13 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
   const [showMenu, setShowMenu] = useState(false)
   const [bookmarked, setBookmarked] = useState<boolean>((post as any).is_bookmarked ?? false)
   const [bookmarkLoading, setBookmarkLoading] = useState(false)
+  const [currentReaction, setCurrentReaction] = useState<ReactionType | null>(post.user_reaction ?? null)
+  const [localReactionCounts, setLocalReactionCounts] = useState<Record<ReactionType, number>>(
+    () => buildReactionCounts(post, liveCounts.reaction_counts)
+  )
+  const [reactionBurst, setReactionBurst] = useState<ReactionType | null>(null)
+  const [commentPulse, setCommentPulse] = useState(false)
+  const lastCommentIdRef = useRef<string | null>(post.latest_comment?.id ?? null)
 
   async function handleBookmark(e: React.MouseEvent) {
     e.stopPropagation()
@@ -104,6 +138,21 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
     return trackPostVisibility(post.id, cardRef.current)
   }, [post.id]) // eslint-disable-line
 
+  useEffect(() => {
+    setCurrentReaction(post.user_reaction ?? null)
+  }, [post.id, post.user_reaction])
+
+  useEffect(() => {
+    setLocalReactionCounts(buildReactionCounts(post, liveCounts.reaction_counts))
+  }, [post.id, post.reaction_counts, liveCounts.reaction_counts])
+
+  useEffect(() => {
+    setLocalContent(post.content)
+    setLocalImage(post.image_url)
+    setLocalVideo((post as any).video_url ?? null)
+    setLocalRevealed(post.has_revealed ?? false)
+  }, [post.id, post.content, post.image_url, post.video_url, post.has_revealed])
+
   const statusLine = (() => {
     const p = post as any
     const parts: string[] = []
@@ -121,6 +170,22 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
     ? 'Anonymous'
     : (displayUser?.display_name || displayUser?.full_name || displayUser?.username || 'Someone')
   const isOwner = !!(profile && post.user_id === profile.id)
+  const displayedCommentCount = liveCounts.comment_count ?? post.comment_count ?? 0
+  const latestComment = liveCounts.latest_comment ?? post.latest_comment ?? null
+  const latestCommentAuthor = latestComment?.is_anonymous
+    ? 'Anonymous'
+    : (latestComment?.user?.display_name || latestComment?.user?.username || 'Someone')
+
+  useEffect(() => {
+    if (!latestComment?.id) return
+    if (lastCommentIdRef.current && lastCommentIdRef.current !== latestComment.id) {
+      setCommentPulse(true)
+      const timeout = setTimeout(() => setCommentPulse(false), 900)
+      lastCommentIdRef.current = latestComment.id
+      return () => clearTimeout(timeout)
+    }
+    lastCommentIdRef.current = latestComment.id
+  }, [latestComment?.id])
 
   async function handleReact(type: ReactionType) {
     if (!isLoggedIn) {
@@ -128,15 +193,38 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
       toast.error('Sign in to react')
       return
     }
+    if (reactingType) return
+
+    const prevReaction = currentReaction
+    const nextReaction = type === prevReaction ? null : type
+
     setReactingType(type)
+    setReactionBurst(type)
+    setCurrentReaction(nextReaction)
+    setLocalReactionCounts((prev) => {
+      const nextCounts = { ...prev }
+      if (prevReaction) {
+        nextCounts[prevReaction] = Math.max(0, (nextCounts[prevReaction] || 0) - 1)
+      }
+      if (nextReaction) {
+        nextCounts[nextReaction] = (nextCounts[nextReaction] || 0) + 1
+      }
+      return nextCounts
+    })
     try {
       analytics.track('post_react', { post_id: post.id, type })
-      await optimisticReact(post.id, type, post.user_reaction)
+      trackReact(post.id, type)
+      await optimisticReact(post.id, type, prevReaction)
     } catch (err) {
+      setCurrentReaction(prevReaction)
+      setLocalReactionCounts(buildReactionCounts(post, liveCounts.reaction_counts))
       console.error('[FeedCard] React error:', err)
       toast.error(getErrorMessage(err))
     } finally {
-      setTimeout(() => setReactingType(null), 300)
+      setTimeout(() => {
+        setReactingType(null)
+        setReactionBurst(null)
+      }, 380)
     }
   }
 
@@ -430,20 +518,20 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
       {/* Reactions + actions */}
       <div className="flex items-center gap-1.5 pt-3 border-t border-border flex-wrap">
         {(Object.entries(REACTION_CONFIG) as [ReactionType, typeof REACTION_CONFIG[ReactionType]][]).map(([type, cfg]) => {
-          // Prefer live realtime counts over stale SWR data
-          const count = (liveCounts as any)?.reaction_counts?.[type] ?? post.reaction_counts?.[type] ?? 0
-          const isActive = post.user_reaction === type
+          const count = localReactionCounts[type] ?? 0
+          const isActive = currentReaction === type
           return (
             <button key={type} onClick={() => handleReact(type)} title={cfg.label}
               className={cn(
-                'flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium border transition-all active:scale-95',
-                reactingType === type && 'animate-pop',
+                'flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium border transition-all duration-200 active:scale-95',
+                reactionBurst === type && 'animate-reaction-burst shadow-glow-sm',
                 isActive
-                  ? `bg-primary-muted border-primary ${cfg.color}`
+                  ? 'border-primary bg-primary/10'
                   : 'bg-transparent border-border text-text-secondary hover:border-border-active hover:text-text'
-              )}>
-              <span>{cfg.emoji}</span>
-              {count > 0 && <span>{count}</span>}
+              )}
+              style={isActive ? { color: cfg.color, borderColor: `${cfg.color}88`, backgroundColor: `${cfg.color}14` } : undefined}>
+              <span className={cn(reactionBurst === type && 'animate-count-bump')}>{cfg.emoji}</span>
+              {count > 0 && <span className={cn('tabular-nums', reactionBurst === type && 'animate-count-bump')}>{count}</span>}
             </button>
           )
         })}
@@ -451,7 +539,7 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
         <Link href={`/post/${post.id}`}
           className="flex items-center gap-1 text-xs text-text-muted hover:text-text transition-colors px-2 py-1.5">
           <MessageCircle size={14} />
-          {(liveCounts?.comment_count ?? post.comment_count ?? 0) > 0 && <span>{liveCounts?.comment_count ?? post.comment_count ?? 0}</span>}
+          {displayedCommentCount > 0 && <span className={cn('tabular-nums', commentPulse && 'animate-count-bump')}>{displayedCommentCount}</span>}
         </Link>
         <button onClick={handleReshare}
           className="flex items-center gap-1 text-xs text-text-muted hover:text-primary transition-colors px-2 py-1.5"
@@ -470,6 +558,26 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
           <Bookmark size={14} className={bookmarked ? "fill-primary" : ""} />
         </button>
       </div>
+
+      {showLatestCommentPreview && latestComment && displayedCommentCount > 0 && (
+        <Link
+          href={`/post/${post.id}`}
+          className={cn(
+            'mt-3 block rounded-2xl border border-border bg-bg-card2/70 px-3 py-2.5 transition-all hover:border-border-active',
+            commentPulse && 'animate-slide-down'
+          )}
+        >
+          <div className="flex items-center gap-2 text-[11px] text-text-muted mb-1">
+            <span className="font-semibold text-text-secondary">{latestCommentAuthor}</span>
+            <span>{getRelativeTime(latestComment.created_at)}</span>
+            <span>· Latest comment</span>
+          </div>
+          <p className="text-sm text-text-secondary leading-relaxed line-clamp-2">
+            {latestComment.parent_id ? '↳ ' : ''}
+            {latestComment.content}
+          </p>
+        </Link>
+      )}
     </article>
   )
 })

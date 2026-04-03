@@ -1,9 +1,10 @@
-export type DirectMessageAttachmentType = 'image' | 'video'
+export type DirectMessageAttachmentType = 'image' | 'video' | 'audio'
 
 export interface DirectMessageAttachment {
   type: DirectMessageAttachmentType
   url: string
   thumbnail_url?: string | null
+  duration_sec?: number | null
 }
 
 function asText(value: unknown) {
@@ -16,13 +17,14 @@ export function normalizeDirectMessageAttachments(message: any): DirectMessageAt
 
   for (const item of fromColumn) {
     if (!item || typeof item !== 'object') continue
-    const type = item.type === 'video' ? 'video' : item.type === 'image' ? 'image' : null
+    const type = item.type === 'video' ? 'video' : item.type === 'image' ? 'image' : item.type === 'audio' ? 'audio' : null
     const url = asText(item.url).trim()
     if (!type || !url) continue
     next.push({
       type,
       url,
       thumbnail_url: asText(item.thumbnail_url || '').trim() || null,
+      duration_sec: typeof item.duration_sec === 'number' ? item.duration_sec : null,
     })
   }
 
@@ -36,6 +38,7 @@ export function normalizeDirectMessageAttachments(message: any): DirectMessageAt
       type: 'video',
       url: message.video_url,
       thumbnail_url: asText(message?.video_thumbnail_url || '').trim() || null,
+      duration_sec: null,
     })
   }
 
@@ -60,10 +63,14 @@ export function getDirectMessagePreview(message: any, viewerId?: string | null) 
 
   const imageCount = attachments.filter((item) => item.type === 'image').length
   const videoCount = attachments.filter((item) => item.type === 'video').length
+  const audioCount = attachments.filter((item) => item.type === 'audio').length
 
   if (attachments.length === 1) {
-    return attachments[0].type === 'video' ? '🎥 Video' : '📷 Photo'
+    if (attachments[0].type === 'video') return '🎥 Video'
+    if (attachments[0].type === 'audio') return '🎤 Voice message'
+    return '📷 Photo'
   }
+  if (audioCount && !imageCount && !videoCount) return audioCount === 1 ? '🎤 Voice message' : `🎤 ${audioCount} voice notes`
   if (imageCount && !videoCount) return `📷 ${imageCount} photos`
   if (videoCount && !imageCount) return `🎥 ${videoCount} videos`
   return `📎 ${attachments.length} attachments`

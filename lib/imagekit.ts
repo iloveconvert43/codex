@@ -30,8 +30,13 @@ export const ALLOWED_IMAGE_TYPES = [
 export const ALLOWED_VIDEO_TYPES = [
   'video/mp4','video/webm','video/quicktime','video/x-m4v','video/mpeg','video/3gpp',
 ]
+export const ALLOWED_AUDIO_TYPES = [
+  'audio/webm','audio/mp4','audio/mpeg','audio/mp3','audio/wav','audio/x-wav',
+  'audio/aac','audio/ogg','audio/x-m4a','audio/m4a',
+]
 export const IMAGE_MAX_BYTES        = 10 * 1024 * 1024
 export const VIDEO_MAX_BYTES        = 150 * 1024 * 1024
+export const AUDIO_MAX_BYTES        = 25 * 1024 * 1024
 export const VIDEO_MAX_DURATION_SEC = 60
 
 // ── Folders ───────────────────────────────────────────────────
@@ -40,6 +45,7 @@ export const VIDEO_MAX_DURATION_SEC = 60
 const FOLDERS: Record<string, string> = {
   images:  'posts',
   videos:  'videos',
+  audio:   'audio',
   avatars: 'avatars',
   covers:  'covers',
 }
@@ -53,7 +59,9 @@ export function generateFileName(p: { type: string; userId: string; mimeType: st
 
 function mimeToExt(m: string): string {
   return ({ 'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif',
-            'image/heic':'heic','video/mp4':'mp4','video/webm':'webm','video/quicktime':'mov' } as any)[m] ?? 'bin'
+            'image/heic':'heic','video/mp4':'mp4','video/webm':'webm','video/quicktime':'mov',
+            'audio/webm':'webm','audio/mp4':'m4a','audio/mpeg':'mp3','audio/mp3':'mp3','audio/wav':'wav',
+            'audio/x-wav':'wav','audio/aac':'aac','audio/ogg':'ogg','audio/x-m4a':'m4a','audio/m4a':'m4a' } as any)[m] ?? 'bin'
 }
 
 // ── Server-side HMAC signing ─────────────────────────────────

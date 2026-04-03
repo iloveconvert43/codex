@@ -18,13 +18,16 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     const supabase = createAdminClient()
     const auth = await getAuthUser(req, supabase)
     const viewerId = auth?.userId ?? null
+    const isOwner = viewerId === params.id
 
-    // Redis cache — 60s
-    const cached = await getCachedProfile(params.id, viewerId || 'anon')
-    if (cached) {
-      const res = NextResponse.json(cached)
-      res.headers.set('X-Cache', 'HIT')
-      return res
+    // Skip Redis for own profile so freshly created posts show up immediately.
+    if (!isOwner) {
+      const cached = await getCachedProfile(params.id, viewerId || 'anon')
+      if (cached) {
+        const res = NextResponse.json(cached)
+        res.headers.set('X-Cache', 'HIT')
+        return res
+      }
     }
 
     // All queries in parallel — each wrapped so one failure doesn't block others
@@ -54,8 +57,32 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       return r
     }
 
-    const isOwner = viewerId === params.id
     const posts = (postsRes.data || []).filter((p: any) => isOwner || !p.is_anonymous)
+    let enrichedPosts = posts
+
+    if (posts.length > 0) {
+      const postIds = posts.map((post: any) => post.id)
+      const [reactionRes, commentRes] = await Promise.all([
+        safeQuery(() => supabase.from('reactions').select('post_id, type').in('post_id', postIds)),
+        safeQuery(() => supabase.from('comments').select('post_id').in('post_id', postIds).eq('is_deleted', false)),
+      ])
+
+      const reactionCountMap: Record<string, number> = {}
+      for (const reaction of (reactionRes.data || [])) {
+        reactionCountMap[reaction.post_id] = (reactionCountMap[reaction.post_id] || 0) + 1
+      }
+
+      const commentCountMap: Record<string, number> = {}
+      for (const comment of (commentRes.data || [])) {
+        commentCountMap[comment.post_id] = (commentCountMap[comment.post_id] || 0) + 1
+      }
+
+      enrichedPosts = posts.map((post: any) => ({
+        ...post,
+        reaction_count: reactionCountMap[post.id] || 0,
+        comment_count: commentCountMap[post.id] || 0,
+      }))
+    }
 
     const result = {
       data: {
@@ -63,16 +90,19 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         follower_count:  followerRes.count ?? 0,
         following_count: followingRes.count ?? 0,
         points:          pointsRes.data ?? { total_points: 0, weekly_points: 0, level: 'curious_newcomer' },
-        posts,
+        posts:           enrichedPosts,
         is_following:    !!followRes.data,
         is_own_profile:  isOwner,
       }
     }
 
-    setCachedProfile(params.id, viewerId || 'anon', result)  // async
+    if (!isOwner) {
+      setCachedProfile(params.id, viewerId || 'anon', result)  // async
+    }
 
     const res = NextResponse.json(result)
-    res.headers.set('Cache-Control', 'private, max-age=30, stale-while-revalidate=60')
+    res.headers.set('Cache-Control', isOwner ? 'no-store' : 'private, max-age=30, stale-while-revalidate=60')
+    res.headers.set('X-Cache', isOwner ? 'BYPASS' : 'MISS')
     return res
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })

@@ -124,6 +124,7 @@ export interface Post {
   user_reaction?: ReactionType | null
   has_revealed?: boolean
   distance_km?: number
+  latest_comment?: PostCommentPreview | null
 }
 
 // ── Comment ────────────────────────────────────────────────
@@ -142,6 +143,17 @@ export interface Comment {
   user?: User | null
   replies?: Comment[]
   user_liked?: boolean
+}
+
+export interface PostCommentPreview {
+  id: string
+  post_id: string
+  user_id: string
+  parent_id?: string | null
+  content: string
+  created_at: string
+  is_anonymous?: boolean
+  user?: Pick<User, 'id' | 'username' | 'display_name' | 'avatar_url' | 'is_verified'> | null
 }
 
 // ── Story ──────────────────────────────────────────────────

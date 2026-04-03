@@ -18,10 +18,10 @@ import useSWR from 'swr'
 import TopBar from '@/components/layout/TopBar'
 import BottomNav from '@/components/layout/BottomNav'
 import type { Post } from '@/types'
+import { addPendingPost } from '@/lib/pendingPosts'
 
 const DRAFT_KEY = 'hushly-post-draft-v2'
 const FEED_REFRESH_KEY = 'hushly-feed-refresh'
-const PENDING_POST_KEY = 'hushly-pending-post'
 const DYNAMIC_CACHE_NAMES = ['feed-cache', 'apis', 'pages', 'pages-rsc', 'pages-rsc-prefetch', 'start-url', 'next-data']
 
 async function clearDynamicCaches() {
@@ -319,10 +319,7 @@ export default function CreatePage() {
       try {
         sessionStorage.setItem(FEED_REFRESH_KEY, refreshNonce)
         if (created?.data) {
-          sessionStorage.setItem(PENDING_POST_KEY, JSON.stringify({
-            post: buildPendingPost(created.data, profile),
-            storedAt: Date.now(),
-          }))
+          addPendingPost(buildPendingPost(created.data, profile))
         }
       } catch {}
       await clearDynamicCaches()

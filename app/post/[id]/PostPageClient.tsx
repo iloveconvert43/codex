@@ -80,11 +80,6 @@ function PostContent({ postId }: { postId: string }) {
   const post = postData?.data ?? pendingPost ?? null
   const comments: Comment[] = commentsData?.data || []
 
-  useEffect(() => {
-    if (!postData?.data?.id) return
-    removePendingPost(postData.data.id)
-  }, [postData?.data?.id])
-
   // Signal: opening a post detail = strong positive intent (weight 1.5)
   useEffect(() => {
     if (!post || !isLoggedIn) return
@@ -117,19 +112,13 @@ function PostContent({ postId }: { postId: string }) {
   async function deletePost() {
     if (!confirm('Delete this post? This cannot be undone.')) return
     try {
-      await api.post('/api/upload/delete', { post_id: postId }, { requireAuth: true })
+      await api.delete(`/api/posts/${postId}`, { requireAuth: true })
+      api.post('/api/upload/delete', { post_id: postId }, { requireAuth: true }).catch(() => {})
       removePendingPost(postId)
       toast.success('Post deleted')
       router.push('/')
-    } catch {
-      try {
-        await api.delete(`/api/posts/${postId}`, { requireAuth: true })
-        removePendingPost(postId)
-        toast.success('Post deleted')
-        router.push('/')
-      } catch (err) {
-        toast.error(getErrorMessage(err))
-      }
+    } catch (err) {
+      toast.error(getErrorMessage(err))
     }
   }
 

@@ -106,8 +106,8 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
   const statusLine = (() => {
     const p = post as any
     const parts: string[] = []
-    if (p.feeling_emoji) parts.push(`${p.feeling_emoji} feeling ${p.feeling || ''}`)
-    else if (p.activity_emoji) parts.push(`${p.activity_emoji} ${p.activity || ''}${p.activity_detail ? ' ' + p.activity_detail : ''}`)
+    if (p.feeling_emoji) parts.push(`${p.feeling_emoji} feeling ${p.feeling || ''}`.trim())
+    if (p.activity_emoji) parts.push(`${p.activity_emoji} ${p.activity || ''}${p.activity_detail ? ' ' + p.activity_detail : ''}`.trim())
     if (p.location_name) parts.push(`📍 ${p.location_name}`)
     if (p.is_life_event && p.life_event_emoji) parts.push(`${p.life_event_emoji} ${(p.life_event_type||'').replace(/_/g,' ')}`)
     return parts.join(' · ')

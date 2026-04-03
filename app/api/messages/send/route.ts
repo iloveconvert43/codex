@@ -4,7 +4,7 @@ export const maxDuration = 10
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient, createRouteClient } from '@/lib/supabase-server'
 import { sendMessageSchema, validate } from '@/lib/validation/schemas'
-import { sanitizeInput, rateLimit, getClientIP, isValidUUID } from '@/lib/security'
+import { sanitizeInput, rateLimit, isValidUUID } from '@/lib/security'
 import { queuePush } from '@/lib/push'
 import { getDirectMessagePreview, normalizeDirectMessageAttachments } from '@/lib/direct-messages'
 
@@ -100,6 +100,7 @@ export async function POST(req: NextRequest) {
 
     const firstImage = attachments.find((item) => item.type === 'image') || null
     const firstVideo = attachments.find((item) => item.type === 'video') || null
+    const firstAudio = attachments.find((item) => item.type === 'audio') || null
 
     let { data, error } = await supabase.from('direct_messages')
       .insert({
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
       .single()
 
     if (error && isMissingMessageUpgrade(error)) {
-      if (attachments.length > 1 || firstVideo) {
+      if (attachments.length > 1 || firstVideo || firstAudio) {
         return NextResponse.json({
           error: 'Messaging upgrade needs the latest SQL migration. Run scripts/messaging-upgrade-v1.sql first.',
           code: 'MESSAGING_SQL_REQUIRED',
@@ -168,8 +169,12 @@ export async function DELETE(req: NextRequest) {
     if (!me) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     const { message_id, scope } = await req.json()
     if (!message_id) return NextResponse.json({ error: 'message_id required' }, { status: 400 })
-    const { data: msg } = await supabase.from('direct_messages')
+    const { data: msg, error: msgError } = await supabase.from('direct_messages')
       .select('id,sender_id,receiver_id').eq('id', message_id).single()
+    if (msgError) {
+      console.error('[messages/send DELETE lookup]', msgError.message)
+      return NextResponse.json({ error: msgError.message || 'Message lookup failed' }, { status: 500 })
+    }
     if (!msg || (msg.sender_id !== me.id && msg.receiver_id !== me.id)) {
       return NextResponse.json({ error: 'Cannot delete this message' }, { status: 403 })
     }
@@ -185,7 +190,7 @@ export async function DELETE(req: NextRequest) {
         deleted_for_everyone: true,
         deleted_at: new Date().toISOString(),
         deleted_by: me.id,
-        content: null,
+        content: 'Message deleted',
         image_url: null,
       }
 
@@ -226,7 +231,8 @@ export async function DELETE(req: NextRequest) {
     }
     return NextResponse.json({ ok: true })
   } catch (err: any) {
-    return NextResponse.json({ error: 'Failed' }, { status: 500 })
+    console.error('[messages/send DELETE]', err.message)
+    return NextResponse.json({ error: err.message || 'Failed' }, { status: 500 })
   }
 }
 

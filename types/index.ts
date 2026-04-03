@@ -58,11 +58,18 @@ export interface User {
   display_name: string | null
   bio: string | null
   avatar_url: string | null
+  cover_url?: string | null
   gender: Gender | null
   dob: string | null
   phone: string | null
   nationality: string | null
   address: string | null
+  current_city?: string | null
+  hometown?: string | null
+  relationship_status?: string | null
+  pronouns?: string | null
+  languages?: string[] | null
+  pinned_info?: string | null
   privacy_settings: UserPrivacySettings
   latitude: number | null
   longitude: number | null
@@ -72,6 +79,7 @@ export interface User {
   scope: 'global' | 'nearby' | 'city'
   is_anonymous: boolean
   is_verified: boolean
+  is_private?: boolean
   email_verified: boolean
   phone_verified: boolean
   is_banned: boolean

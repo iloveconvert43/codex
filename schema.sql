@@ -967,6 +967,8 @@ CREATE OR REPLACE FUNCTION toggle_comment_reaction(
 ) RETURNS TABLE(reaction TEXT, like_count INTEGER, dislike_count INTEGER) AS $$
 DECLARE
   v_existing_reaction TEXT;
+  v_like_count INTEGER;
+  v_dislike_count INTEGER;
 BEGIN
   IF p_reaction NOT IN ('like', 'dislike') THEN
     RAISE EXCEPTION 'Invalid reaction type';
@@ -1020,9 +1022,12 @@ BEGIN
   END IF;
 
   SELECT c.like_count, c.dislike_count
-  INTO like_count, dislike_count
+  INTO v_like_count, v_dislike_count
   FROM comments c
   WHERE c.id = p_comment_id;
+
+  like_count := COALESCE(v_like_count, 0);
+  dislike_count := COALESCE(v_dislike_count, 0);
 
   RETURN NEXT;
 END;

@@ -24,6 +24,8 @@ const NOTIF_ICONS: Record<string, string> = {
   follow_request:         '🔐',
   follow_accepted:        '✅',
   tagged_in_post:         '🏷️',
+  story_mention:          '📸',
+  comment_mention:        '📍',
   mystery_revealed:       '✨',
   challenge_reminder:     '🔥',
   streak_milestone:       '⚡',

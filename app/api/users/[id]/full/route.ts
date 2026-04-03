@@ -5,7 +5,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase-server'
 import { isValidUUID } from '@/lib/security'
 import { getAuthUser } from '@/lib/auth-cache'
-import { getCachedProfile, setCachedProfile } from '@/lib/redis'
 
 type Ctx = { params: { id: string } }
 
@@ -20,19 +19,26 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     const viewerId = auth?.userId ?? null
     const isOwner = viewerId === params.id
 
-    // Skip Redis for own profile so freshly created posts show up immediately.
-    if (!isOwner) {
-      const cached = await getCachedProfile(params.id, viewerId || 'anon')
-      if (cached) {
-        const res = NextResponse.json(cached)
-        res.headers.set('X-Cache', 'HIT')
-        return res
-      }
-    }
-
     // All queries in parallel — each wrapped so one failure doesn't block others
     const safeQuery = async (fn: () => Promise<any>) => {
       try { return await fn() } catch { return { data: null, count: 0, error: null } }
+    }
+
+    const basePostSelect = 'id,content,created_at,view_count,is_anonymous,is_mystery,image_url,video_url,gif_url,feeling,feeling_emoji,activity,activity_emoji,activity_detail,location_name,is_life_event,life_event_type,life_event_emoji,scope'
+    const fallbackPostSelect = 'id,content,created_at,view_count,is_anonymous,is_mystery,image_url,video_url,feeling,feeling_emoji,activity,activity_emoji,activity_detail,location_name,is_life_event,life_event_type,life_event_emoji,scope'
+
+    const queryProfilePosts = async () => {
+      const run = async (select: string) => supabase.from('posts')
+        .select(select)
+        .eq('user_id', params.id)
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false })
+        .limit(20)
+
+      const primary = await run(basePostSelect)
+      if (!primary.error) return primary
+      if (!primary.error.message?.includes('does not exist')) return primary
+      return run(fallbackPostSelect)
     }
 
     const [userRes, followerRes, followingRes, pointsRes, postsRes, followRes] = await Promise.all([
@@ -41,10 +47,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       safeQuery(() => supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', params.id)),
       safeQuery(() => supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', params.id)),
       safeQuery(() => supabase.from('user_points').select('total_points,weekly_points,level').eq('user_id', params.id).single()),
-      safeQuery(() => supabase.from('posts')
-        .select('id,content,created_at,view_count,is_anonymous,is_mystery,image_url,video_url,gif_url,feeling,feeling_emoji,activity,activity_emoji,activity_detail,location_name,is_life_event,life_event_type,life_event_emoji')
-        .eq('user_id', params.id).eq('is_deleted', false)
-        .order('created_at', { ascending: false }).limit(20)),
+      safeQuery(queryProfilePosts),
       safeQuery(() => viewerId && viewerId !== params.id
         ? supabase.from('follows').select('follower_id')
             .eq('follower_id', viewerId).eq('following_id', params.id).maybeSingle()
@@ -96,13 +99,9 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       }
     }
 
-    if (!isOwner) {
-      setCachedProfile(params.id, viewerId || 'anon', result)  // async
-    }
-
     const res = NextResponse.json(result)
-    res.headers.set('Cache-Control', isOwner ? 'no-store' : 'private, max-age=30, stale-while-revalidate=60')
-    res.headers.set('X-Cache', isOwner ? 'BYPASS' : 'MISS')
+    res.headers.set('Cache-Control', 'no-store')
+    res.headers.set('X-Cache', 'BYPASS')
     return res
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })

@@ -20,6 +20,8 @@ import DesktopSidebar from '@/components/layout/DesktopSidebar'
 import Avatar from '@/components/ui/Avatar'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
+import { usePendingUserPosts } from '@/hooks/usePendingPosts'
+import { mergePostsWithPending } from '@/lib/pendingPosts'
 
 // ── Avatar component ──────────────────────────────────────────
 function ProfileAvatar({ user, size = 86 }: { user: any; size?: number }) {
@@ -84,7 +86,7 @@ function StoryRing({ highlight, onClick }: { highlight: any; onClick: () => void
 function PostCard({ post }: { post: any }) {
   const statusParts: string[] = []
   if (post.feeling_emoji) statusParts.push(`${post.feeling_emoji} feeling ${post.feeling || ''}`)
-  else if (post.activity_emoji) statusParts.push(`${post.activity_emoji} ${post.activity || ''}${post.activity_detail ? ' ' + post.activity_detail : ''}`)
+  if (post.activity_emoji) statusParts.push(`${post.activity_emoji} ${post.activity || ''}${post.activity_detail ? ' ' + post.activity_detail : ''}`)
   if (post.location_name) statusParts.push(`📍 ${post.location_name}`)
   if (post.is_life_event && post.life_event_emoji) {
     statusParts.push(`${post.life_event_emoji} ${(post.life_event_type || '').replace(/_/g, ' ')}`)
@@ -170,7 +172,8 @@ export default function ProfileDetailPage() {
   const followerCount  = fd?.follower_count  ?? 0
   const followingCount = fd?.following_count ?? 0
   const points         = fd?.points
-  const posts          = fd?.posts ?? []
+  const pendingPosts   = usePendingUserPosts(myProfile?.id === id ? String(id) : null)
+  const posts          = mergePostsWithPending(fd?.posts ?? [], pendingPosts)
   const isFollowing    = fd?.is_following    ?? false
   const isOwnProfile   = fd?.is_own_profile  ?? (myProfile?.id === id)
   const actualFollowing = following !== null ? following : isFollowing

@@ -185,11 +185,24 @@ body {
   from { opacity: 0; transform: scale(0.95); }
   to   { opacity: 1; transform: scale(1); }
 }
+@keyframes reactionBurst {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.16); }
+  70% { transform: scale(0.96); }
+  100% { transform: scale(1); }
+}
+@keyframes countBump {
+  0% { transform: translateY(0) scale(1); }
+  35% { transform: translateY(-1px) scale(1.16); }
+  100% { transform: translateY(0) scale(1); }
+}
 
 .animate-slide-up   { animation: slideUp   0.4s cubic-bezier(0.16,1,0.3,1) forwards; }
 .animate-slide-down { animation: slideDown 0.35s cubic-bezier(0.16,1,0.3,1) forwards; }
 .animate-fade-in    { animation: fadeIn    0.3s ease forwards; }
 .animate-scale-in   { animation: scaleIn  0.35s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+.animate-reaction-burst { animation: reactionBurst 0.38s cubic-bezier(0.34,1.56,0.64,1); }
+.animate-count-bump { animation: countBump 0.32s cubic-bezier(0.34,1.56,0.64,1); }
 
 /* Staggered children animation */
 .stagger > * { opacity: 0; animation: slideUp 0.4s cubic-bezier(0.16,1,0.3,1) forwards; }

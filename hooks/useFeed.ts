@@ -26,6 +26,50 @@ interface FeedPage {
 }
 
 const feedFetcher = (url: string) => swrFetcher<FeedPage>(url)
+const FEED_REFRESH_KEY = 'hushly-feed-refresh'
+const PENDING_POST_KEY = 'hushly-pending-post'
+const PENDING_POST_TTL_MS = 10 * 60 * 1000
+
+interface PendingFeedPost {
+  post: Post
+  storedAt: number
+}
+
+function readPendingFeedPost(): PendingFeedPost | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = sessionStorage.getItem(PENDING_POST_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as PendingFeedPost | null
+    if (!parsed?.post?.id || !parsed?.storedAt) return null
+    if (Date.now() - parsed.storedAt > PENDING_POST_TTL_MS) {
+      sessionStorage.removeItem(PENDING_POST_KEY)
+      return null
+    }
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function prependPostToPages(pages: FeedPage[] | undefined, post: Post): FeedPage[] {
+  if (!pages || pages.length === 0) {
+    return [{ data: [post], hasMore: false, nextCursor: post.created_at ?? null }]
+  }
+
+  const alreadyExists = pages.some((page) =>
+    (page.data ?? []).some((candidate) => candidate.id === post.id)
+  )
+  if (alreadyExists) return pages
+
+  return pages.map((page, index) => {
+    if (index !== 0) return page
+    return {
+      ...page,
+      data: [post, ...(page.data ?? [])].slice(0, 20),
+    }
+  })
+}
 
 function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
   const toRad = (value: number) => (value * Math.PI) / 180
@@ -41,6 +85,11 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
   // Track seen post IDs — reset when filter/city/room changes
   const seenPostIds = useRef<Set<string>>(new Set())
   const prevFilterKey = useRef<string>('')
+  const freshNonceRef = useRef<string | null>(
+    typeof window !== 'undefined' ? sessionStorage.getItem(FEED_REFRESH_KEY) : null
+  )
+  const pendingPostRef = useRef<PendingFeedPost | null>(readPendingFeedPost())
+  const injectedPendingRef = useRef(false)
   const filterKey = `${filter}:${selectedCity || ''}:${roomSlug || ''}`
 
   if (prevFilterKey.current !== filterKey) {
@@ -57,6 +106,9 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
     if (cursor) p.set('cursor', cursor)
     // Pass page depth so server can expand time window for infinite scroll
     p.set('size', String(pageIndex + 1))
+    if (pageIndex === 0 && freshNonceRef.current) {
+      p.set('fresh', freshNonceRef.current)
+    }
 
     if (filter === 'nearby' && lat != null && lng != null) {
       p.set('lat', String(lat))
@@ -86,7 +138,7 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
     },
     feedFetcher,
     {
-      revalidateFirstPage: false,
+      revalidateFirstPage: true,
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
       keepPreviousData: true,
@@ -97,11 +149,47 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
       }
   )
 
+  useEffect(() => {
+    const pending = pendingPostRef.current
+    if (injectedPendingRef.current || !pending) return
+    if (filter !== 'global') return
+
+    injectedPendingRef.current = true
+    seenPostIds.current.add(pending.post.id)
+    upsertPost(pending.post)
+    mutateFeed((pages) => prependPostToPages(pages, pending.post), false)
+  }, [filter, mutateFeed, upsertPost])
+
   // Sync SWR data into feedStore
   useEffect(() => {
     const allPosts = data?.flatMap(p => p.data ?? []) ?? []
     if (allPosts.length > 0) upsertPosts(allPosts)
   }, [data, upsertPosts])
+
+  useEffect(() => {
+    if (!data) return
+
+    const pending = pendingPostRef.current
+    if (!pending) {
+      if (freshNonceRef.current) {
+        try { sessionStorage.removeItem(FEED_REFRESH_KEY) } catch {}
+        freshNonceRef.current = null
+      }
+      return
+    }
+
+    const existsInFreshData = data.some((page) =>
+      (page.data ?? []).some((post) => post.id === pending.post.id)
+    )
+    if (!existsInFreshData) return
+
+    if (freshNonceRef.current) {
+      try { sessionStorage.removeItem(FEED_REFRESH_KEY) } catch {}
+      freshNonceRef.current = null
+    }
+    pendingPostRef.current = null
+    try { sessionStorage.removeItem(PENDING_POST_KEY) } catch {}
+  }, [data])
 
   // Real-time new posts subscription — works for global, city, nearby, friends
   useEffect(() => {

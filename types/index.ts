@@ -3,6 +3,7 @@
 // ============================================================
 
 export type ReactionType = 'interesting' | 'funny' | 'deep' | 'curious'
+export type CommentReactionType = 'like' | 'dislike'
 export type FeedFilter = 'global' | 'nearby' | 'city' | 'friends' | 'room'
 export type Gender = 'male' | 'female' | 'non_binary' | 'prefer_not_to_say'
 export type UserLevel = 'curious_newcomer' | 'story_seeker' | 'mystery_maker' | 'hushly_legend'
@@ -13,6 +14,7 @@ export type NotificationType =
   | 'mystery_revealed' | 'challenge_reminder' | 'streak_milestone' | 'badge_awarded'
   | 'new_anonymous_question' | 'level_up' | 'reshare_received'
   | 'follow_request' | 'follow_accepted' | 'tagged_in_post' | 'message_request'
+  | 'story_mention' | 'comment_mention'
 
 // Privacy settings for profile fields
 export interface UserPrivacySettings {
@@ -138,6 +140,12 @@ export interface Comment {
   is_anonymous: boolean
   is_deleted: boolean
   like_count: number
+  dislike_count?: number
+  user_reaction?: CommentReactionType | null
+  image_url?: string | null
+  video_url?: string | null
+  video_thumbnail_url?: string | null
+  gif_url?: string | null
   mentions: string[]
   created_at: string
   user?: User | null
@@ -153,6 +161,10 @@ export interface PostCommentPreview {
   content: string
   created_at: string
   is_anonymous?: boolean
+  image_url?: string | null
+  video_url?: string | null
+  video_thumbnail_url?: string | null
+  gif_url?: string | null
   user?: Pick<User, 'id' | 'username' | 'display_name' | 'avatar_url' | 'is_verified'> | null
 }
 

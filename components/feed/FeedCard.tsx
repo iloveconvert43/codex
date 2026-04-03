@@ -15,6 +15,7 @@ import toast from 'react-hot-toast'
 import { getErrorMessage, api } from '@/lib/api'
 import { analytics } from '@/lib/analytics'
 import { getOptimizedUrl, getLQIPUrl } from '@/lib/imagekit'
+import { getCommentSummary } from '@/lib/comments'
 import type { Post, ReactionType } from '@/types'
 import { removePendingPost } from '@/lib/pendingPosts'
 
@@ -172,6 +173,7 @@ const FeedCard = memo(function FeedCard({
   const isOwner = !!(profile && post.user_id === profile.id)
   const displayedCommentCount = liveCounts.comment_count ?? post.comment_count ?? 0
   const latestComment = liveCounts.latest_comment ?? post.latest_comment ?? null
+  const latestCommentSummary = getCommentSummary(latestComment)
   const latestCommentAuthor = latestComment?.is_anonymous
     ? 'Anonymous'
     : (latestComment?.user?.display_name || latestComment?.user?.username || 'Someone')
@@ -563,7 +565,7 @@ const FeedCard = memo(function FeedCard({
         <Link
           href={`/post/${post.id}`}
           className={cn(
-            'mt-3 block rounded-2xl border border-border bg-bg-card2/70 px-3 py-2.5 transition-all hover:border-border-active',
+            'latest-comment-surface mt-3 block rounded-2xl px-3 py-2.5 transition-all hover:border-border-active',
             commentPulse && 'animate-slide-down'
           )}
         >
@@ -574,7 +576,7 @@ const FeedCard = memo(function FeedCard({
           </div>
           <p className="text-sm text-text-secondary leading-relaxed line-clamp-2">
             {latestComment.parent_id ? '↳ ' : ''}
-            {latestComment.content}
+            {latestCommentSummary || 'New comment'}
           </p>
         </Link>
       )}

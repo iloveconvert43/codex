@@ -102,7 +102,7 @@ export default function ProfilePage() {
   const { data: fullData } = useSWR(
     profile?.id ? `/api/users/${profile.id}/full` : null,
     swrFetcher,
-    { revalidateOnFocus: true, refreshInterval: 30000 }
+    { revalidateOnFocus: true, revalidateOnMount: true, dedupingInterval: 0, refreshInterval: 30000 }
   )
   const { data: extData } = useSWR(
     profile?.id ? `/api/users/extended-profile?user_id=${profile.id}` : null,

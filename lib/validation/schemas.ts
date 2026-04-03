@@ -54,12 +54,21 @@ export const createCommentSchema = z.object({
 )
 
 // ── Messages ──────────────────────────────────────────────
+const messageAttachmentSchema = z.object({
+  type: z.enum(['image', 'video']),
+  url: z.string().url(),
+  thumbnail_url: z.string().url().nullable().optional(),
+})
+
 export const sendMessageSchema = z.object({
   to_user_id: z.string().uuid('Invalid user ID'),
   content: z.string().min(0).max(1000).trim().default(''),
   image_url: z.string().url().optional().nullable(),
-}).refine(d => d.content.length > 0 || !!d.image_url, {
-  message: 'Message must have content or an image'
+  video_url: z.string().url().optional().nullable(),
+  video_thumbnail_url: z.string().url().optional().nullable(),
+  attachments: z.array(messageAttachmentSchema).max(10).optional().default([]),
+}).refine(d => d.content.length > 0 || !!d.image_url || !!d.video_url || d.attachments.length > 0, {
+  message: 'Message must have content or media'
 })
 
 // ── Reports ──────────────────────────────────────────────

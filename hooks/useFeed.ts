@@ -18,6 +18,7 @@ import { api, swrFetcher, getErrorMessage } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { usePendingFeedPosts } from '@/hooks/usePendingPosts'
 import { mergePostsWithPending, removePendingPosts } from '@/lib/pendingPosts'
+import { applyReactionEverywhere } from '@/lib/postMetrics'
 import { useFeedStore } from '@/store/feedStore'
 import type { Post, FeedFilter, ReactionType } from '@/types'
 
@@ -348,34 +349,7 @@ export async function optimisticReact(
 
   // 1. Instant UI update via Zustand store
   applyReaction(postId, newType, currentReaction)
-
-  // 2. Also update SWR cache for feed pages
-  mutate(
-    (key: unknown) => typeof key === 'string' && key.startsWith('/api/feed'),
-    (pages: FeedPage[] | undefined) => {
-      if (!pages) return pages
-      return pages.map(page => ({
-        ...page,
-        data: (page.data ?? []).map(post => {
-          if (post.id !== postId) return post
-          const counts = { ...(post.reaction_counts || { interesting: 0, funny: 0, deep: 0, curious: 0 }) } as Record<ReactionType, number>
-          if (currentReaction) counts[currentReaction] = Math.max(0, (counts[currentReaction] || 0) - 1)
-          if (newType) counts[newType] = (counts[newType] || 0) + 1
-          return { ...post, reaction_counts: counts, user_reaction: newType }
-        }) }))
-    },
-    false
-  )
-
-  // Update single post SWR cache
-  mutate(`/api/posts/${postId}`, (cur: any) => {
-    if (!cur?.data) return cur
-    const post = cur.data
-    const counts = { ...(post.reaction_counts || {}) } as Record<ReactionType, number>
-    if (currentReaction) counts[currentReaction] = Math.max(0, (counts[currentReaction] || 0) - 1)
-    if (newType) counts[newType] = (counts[newType] || 0) + 1
-    return { ...cur, data: { ...post, reaction_counts: counts, user_reaction: newType } }
-  }, false)
+  applyReactionEverywhere(postId, currentReaction, newType)
 
   // 3. API call with error revert
   try {
@@ -387,7 +361,9 @@ export async function optimisticReact(
   } catch (err) {
     // Revert on failure
     applyReaction(postId, currentReaction ?? null, newType)
+    applyReactionEverywhere(postId, newType, currentReaction ?? null)
     mutate((key: unknown) => typeof key === 'string' && key.startsWith('/api/feed'))
+    mutate((key: unknown) => typeof key === 'string' && key.startsWith('/api/users/'))
     mutate(`/api/posts/${postId}`)
     throw err
   }

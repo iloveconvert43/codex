@@ -521,13 +521,27 @@ CREATE TABLE direct_messages (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   sender_id   UUID REFERENCES users(id) ON DELETE CASCADE,
   receiver_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  content     TEXT NOT NULL CHECK (char_length(content) BETWEEN 1 AND 1000),
+  content     TEXT,
   is_read     BOOLEAN DEFAULT FALSE,
   is_deleted  BOOLEAN DEFAULT FALSE,
   image_url   TEXT,
+  video_url   TEXT,
+  video_thumbnail_url TEXT,
+  attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
+  deleted_for_sender BOOLEAN NOT NULL DEFAULT FALSE,
+  deleted_for_receiver BOOLEAN NOT NULL DEFAULT FALSE,
+  deleted_for_everyone BOOLEAN NOT NULL DEFAULT FALSE,
+  deleted_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  deleted_at  TIMESTAMPTZ,
   reaction    TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (sender_id != receiver_id)
+  CHECK (sender_id != receiver_id),
+  CHECK (
+    NULLIF(trim(COALESCE(content, '')), '') IS NOT NULL
+    OR image_url IS NOT NULL
+    OR video_url IS NOT NULL
+    OR jsonb_array_length(COALESCE(attachments, '[]'::jsonb)) > 0
+  )
 );
 
 CREATE INDEX idx_dm_sender   ON direct_messages (sender_id, created_at DESC);

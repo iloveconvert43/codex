@@ -31,35 +31,74 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       isOwner = me?.id === params.id
     }
 
-    let query = supabase
-      .from('posts')
-      .select('id, content, image_url, video_url, gif_url, is_mystery, is_anonymous, created_at, tags, reaction_count, comment_count, scope, feeling, feeling_emoji, activity, activity_emoji, activity_detail, location_name, is_life_event, life_event_type, life_event_emoji')
-      .eq('user_id', params.id)
-      .eq('is_deleted', false)
-      .order('created_at', { ascending: false })
-      .limit(limit)
+    const baseSelect = 'id, content, image_url, video_url, gif_url, is_mystery, is_anonymous, created_at, tags, view_count, scope, feeling, feeling_emoji, activity, activity_emoji, activity_detail, location_name, is_life_event, life_event_type, life_event_emoji'
+    const fallbackSelect = 'id, content, image_url, video_url, is_mystery, is_anonymous, created_at, tags, view_count, scope, feeling, feeling_emoji, activity, activity_emoji, activity_detail, location_name, is_life_event, life_event_type, life_event_emoji'
 
-    // Non-owners cannot see anonymous posts
-    if (!isOwner) {
-      query = query.eq('is_anonymous', false)
+    const buildQuery = (select: string) => {
+      let query = supabase
+        .from('posts')
+        .select(select)
+        .eq('user_id', params.id)
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false })
+        .limit(limit)
+
+      // Non-owners cannot see anonymous posts
+      if (!isOwner) {
+        query = query.eq('is_anonymous', false)
+      }
+
+      if (cursor) {
+        query = query.lt('created_at', cursor)
+      }
+
+      return query
     }
 
-    if (cursor) {
-      query = query.lt('created_at', cursor)
+    let { data: posts, error } = await buildQuery(baseSelect)
+    if (error?.message?.includes('does not exist')) {
+      const fallback = await buildQuery(fallbackSelect)
+      posts = fallback.data
+      error = fallback.error
     }
-
-    const { data: posts, error } = await query
     if (error) throw error
 
-    const nextCursor = posts && posts.length === limit
-      ? posts[posts.length - 1].created_at
+    let enrichedPosts = posts || []
+    if (posts?.length) {
+      const postIds = posts.map((post) => post.id)
+      const [reactionRes, commentRes] = await Promise.all([
+        supabase.from('reactions').select('post_id').in('post_id', postIds),
+        supabase.from('comments').select('post_id').in('post_id', postIds).eq('is_deleted', false),
+      ])
+
+      const reactionCountMap: Record<string, number> = {}
+      for (const reaction of (reactionRes.data || [])) {
+        reactionCountMap[reaction.post_id] = (reactionCountMap[reaction.post_id] || 0) + 1
+      }
+
+      const commentCountMap: Record<string, number> = {}
+      for (const comment of (commentRes.data || [])) {
+        commentCountMap[comment.post_id] = (commentCountMap[comment.post_id] || 0) + 1
+      }
+
+      enrichedPosts = posts.map((post) => ({
+        ...post,
+        reaction_count: reactionCountMap[post.id] || 0,
+        comment_count: commentCountMap[post.id] || 0,
+      }))
+    }
+
+    const nextCursor = enrichedPosts.length === limit
+      ? enrichedPosts[enrichedPosts.length - 1].created_at
       : null
 
-    return NextResponse.json({
-      data: posts || [],
-      hasMore: posts?.length === limit,
+    const res = NextResponse.json({
+      data: enrichedPosts,
+      hasMore: enrichedPosts.length === limit,
       nextCursor
     })
+    res.headers.set('Cache-Control', 'no-store')
+    return res
   } catch (err: any) {
     console.error('[users/posts]', err.message)
     return NextResponse.json({ data: [] })

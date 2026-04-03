@@ -81,6 +81,11 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: 'Invalid avatar URL' }, { status: 400 })
       }
     }
+    if (updates.cover_url) {
+      try { new URL(updates.cover_url) } catch {
+        return NextResponse.json({ error: 'Invalid cover URL' }, { status: 400 })
+      }
+    }
 
     // Validate privacy_settings structure
     if (updates.privacy_settings) {
@@ -106,7 +111,9 @@ export async function PATCH(req: NextRequest) {
     const { data, error } = await supabase
       .from('users').update(updates).eq('id', profile.id).select().single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json({ data })
+    const res = NextResponse.json({ data })
+    res.headers.set('Cache-Control', 'no-store')
+    return res
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })
   }

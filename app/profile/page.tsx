@@ -15,6 +15,8 @@ import { cn, getRelativeTime } from '@/lib/utils'
 import Link from 'next/link'
 import Image from 'next/image'
 import TopBar from '@/components/layout/TopBar'
+import { usePendingUserPosts } from '@/hooks/usePendingPosts'
+import { mergePostsWithPending } from '@/lib/pendingPosts'
 
 const BADGE_LABELS: Record<string, string> = {
   streak_7: '🔥 7-Day Streak',
@@ -46,7 +48,7 @@ function OwnAvatar({ profile, size = 86 }: { profile: any; size?: number }) {
 function PostCard({ post }: { post: any }) {
   const statusParts: string[] = []
   if (post.feeling_emoji) statusParts.push(`${post.feeling_emoji} feeling ${post.feeling || ''}`)
-  else if (post.activity_emoji) statusParts.push(`${post.activity_emoji} ${post.activity || ''}${post.activity_detail ? ' ' + post.activity_detail : ''}`)
+  if (post.activity_emoji) statusParts.push(`${post.activity_emoji} ${post.activity || ''}${post.activity_detail ? ' ' + post.activity_detail : ''}`)
   if (post.location_name) statusParts.push(`📍 ${post.location_name}`)
   if (post.is_life_event && post.life_event_emoji) {
     statusParts.push(`${post.life_event_emoji} ${(post.life_event_type || '').replace(/_/g, ' ')}`)
@@ -112,6 +114,7 @@ export default function ProfilePage() {
     swrFetcher,
     { revalidateOnFocus: false }
   )
+  const pendingPosts = usePendingUserPosts(profile?.id)
 
   if (loading || !profile) {
     return (
@@ -124,7 +127,7 @@ export default function ProfilePage() {
   const fd         = fullData?.data
   const ext        = extData?.data
   const highlights = highlightsData?.data || []
-  const posts      = fd?.posts ?? []
+  const posts      = mergePostsWithPending(fd?.posts ?? [], pendingPosts)
   const followerCount  = fd?.follower_count  ?? 0
   const followingCount = fd?.following_count ?? 0
   const points     = fd?.points

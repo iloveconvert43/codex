@@ -27,6 +27,7 @@ export interface UploadResult {
   fileId:   string   // ImageKit fileId for deletion
   width?:   number
   height?:  number
+  thumbnailUrl?: string
 }
 
 export type UploadType = 'images' | 'videos' | 'avatars' | 'covers'
@@ -101,6 +102,7 @@ async function _doUpload(
     fileId:   result.fileId   ?? '',
     width:    result.width,
     height:   result.height,
+    thumbnailUrl: result.thumbnailUrl,
   }
 }
 

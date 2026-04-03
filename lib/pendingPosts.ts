@@ -139,14 +139,20 @@ export function getPendingPostsForFeed(
     .filter((post) => post.user_id === ownerId)
     .filter((post) => {
       if (post.is_deleted) return false
+      const scope = (post.scope || 'global') as string
 
       if (filter === 'friends') return false
 
+      if (filter === 'global') {
+        return scope === 'global'
+      }
+
       if (filter === 'city') {
-        return !!selectedCity && post.city === selectedCity
+        return scope === 'city' && !!selectedCity && post.city === selectedCity
       }
 
       if (filter === 'nearby') {
+        if (scope !== 'nearby') return false
         if (lat == null || lng == null) return false
         if (post.latitude == null || post.longitude == null) return false
         return distanceKm(lat, lng, Number(post.latitude), Number(post.longitude)) <= radiusKm

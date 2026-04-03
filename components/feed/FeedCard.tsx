@@ -16,6 +16,7 @@ import { getErrorMessage, api } from '@/lib/api'
 import { analytics } from '@/lib/analytics'
 import { getOptimizedUrl, getLQIPUrl } from '@/lib/imagekit'
 import type { Post, ReactionType } from '@/types'
+import { removePendingPost } from '@/lib/pendingPosts'
 
 // ── Progressive Image — LQIP blur-up (Facebook-style) ──────────
 const ProgressiveImage = memo(function ProgressiveImage({ src, alt, priority, className }: {
@@ -194,6 +195,7 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
     try {
       // Soft-delete the post first (always), then cleanup uploaded media
       await api.delete(`/api/posts/${post.id}`, { requireAuth: true })
+      removePendingPost(post.id)
       // Cleanup uploaded media (non-blocking, best effort)
       api.post('/api/upload/delete', { post_id: post.id }, { requireAuth: true }).catch(() => {})
       toast.success('Post deleted')
@@ -235,8 +237,18 @@ const FeedCard = memo(function FeedCard({ post, onReshare, priority }: { post: P
     } catch { toast.error('Could not save feedback') }
   }
 
+  function handleOpenPost(event: React.MouseEvent<HTMLElement>) {
+    const target = event.target as HTMLElement | null
+    if (target?.closest('a, button, input, textarea, video')) return
+    router.push(`/post/${post.id}`)
+  }
+
   return (
-    <article ref={cardRef} className={cn("bg-bg-card border-b border-border px-4 py-4 transition-all hover:bg-bg-card2 group", deleting && "opacity-40 pointer-events-none scale-[0.98]")}>
+    <article
+      ref={cardRef}
+      onClick={handleOpenPost}
+      className={cn("bg-bg-card border-b border-border px-4 py-4 transition-all hover:bg-bg-card2 group cursor-pointer", deleting && "opacity-40 pointer-events-none scale-[0.98]")}
+    >
 
       {/* Reshare indicator */}
       {post.reshared_from_id && (

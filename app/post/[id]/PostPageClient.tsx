@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import useSWR, { mutate } from 'swr'
+import useSWR from 'swr'
 
 import Link from 'next/link'
 import { ArrowLeft, Send, Loader2, Trash2 } from 'lucide-react'
@@ -21,10 +21,7 @@ import type { Comment } from '@/types'
 import { usePendingPost } from '@/hooks/usePendingPosts'
 import { removePendingPost } from '@/lib/pendingPosts'
 import { supabase } from '@/lib/supabase'
-
-type CommentFeedPage = {
-  data?: Comment[]
-}
+import { incrementPostCommentEverywhere } from '@/lib/postMetrics'
 
 function upsertCommentTree(existing: Comment[], incoming: Comment) {
   const next = [...existing]
@@ -46,48 +43,6 @@ function upsertCommentTree(existing: Comment[], incoming: Comment) {
       replies: [...replies, incoming].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
     }
   })
-}
-
-function updateFeedCachesForComment(postId: string, createdComment: Comment) {
-  mutate(
-    (key: unknown) => typeof key === 'string' && key.startsWith('/api/feed'),
-    (pages: CommentFeedPage[] | undefined) => {
-      if (!pages) return pages
-      return pages.map((page: any) => ({
-        ...page,
-        data: (page.data || []).map((post: any) => (
-          post.id !== postId
-            ? post
-            : {
-                ...post,
-                comment_count: (post.comment_count || 0) + 1,
-                latest_comment: createdComment.is_anonymous
-                  ? {
-                      id: createdComment.id,
-                      post_id: createdComment.post_id,
-                      user_id: createdComment.user_id,
-                      parent_id: createdComment.parent_id,
-                      content: createdComment.content,
-                      created_at: createdComment.created_at,
-                      is_anonymous: true,
-                      user: null,
-                    }
-                  : {
-                      id: createdComment.id,
-                      post_id: createdComment.post_id,
-                      user_id: createdComment.user_id,
-                      parent_id: createdComment.parent_id,
-                      content: createdComment.content,
-                      created_at: createdComment.created_at,
-                      is_anonymous: false,
-                      user: createdComment.user || null,
-                    },
-              }
-        )),
-      }))
-    },
-    false
-  )
 }
 
 export default function PostPageClient({ id }: { id: string }) {
@@ -184,8 +139,15 @@ function PostContent({ postId }: { postId: string }) {
       })
       .subscribe()
 
+    const pollId = window.setInterval(() => {
+      if (document.hidden || !navigator.onLine) return
+      void mutateComments()
+      void mutatePost()
+    }, 8000)
+
     return () => {
       if (timeout) clearTimeout(timeout)
+      window.clearInterval(pollId)
       supabase.removeChannel(channel)
     }
   }, [postId, mutateComments, mutatePost])
@@ -229,7 +191,7 @@ function PostContent({ postId }: { postId: string }) {
           }
         }, false)
 
-        updateFeedCachesForComment(postId, createdComment)
+        incrementPostCommentEverywhere(postId, createdComment)
       }
 
       void mutateComments()

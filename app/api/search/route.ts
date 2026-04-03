@@ -30,9 +30,11 @@ export async function GET(req: NextRequest) {
     const sessionUser = _authId ? { id: _authId } : null
     // (auth.getUser replaced with JWT decode)
     let userId: string | null = null
+    let userCity: string | null = null
     if (sessionUser) {
-      const { data: me } = await supabase.from('users').select('id').eq('auth_id', sessionUser.id).single()
+      const { data: me } = await supabase.from('users').select('id, city').eq('auth_id', sessionUser.id).single()
       userId = me?.id ?? null
+      userCity = me?.city ?? null
     }
 
     // Strip leading # for hashtag search
@@ -55,7 +57,7 @@ export async function GET(req: NextRequest) {
         .select(`
           id, content, image_url, is_anonymous, is_mystery,
           city, tags, created_at, view_count, reveal_count,
-          user:users(id, username, display_name, avatar_url, is_verified)
+          user:users(id, username, display_name, avatar_url, is_verified, city, is_private)
         `)
         .eq('is_deleted', false)
         .or(`content.ilike.${ilike},tags.cs.{${cleanQ}}`)
@@ -63,13 +65,37 @@ export async function GET(req: NextRequest) {
         .order('created_at', { ascending: false })
         .limit(type === 'all' ? Math.ceil(limit * 0.6) : limit)
 
+      const authorIds = Array.from(new Set((posts || []).map((post: any) => post.user?.id).filter(Boolean)))
+      let followingSet = new Set<string>()
+      if (userId && authorIds.length) {
+        const { data: follows } = await supabase
+          .from('follows')
+          .select('following_id')
+          .eq('follower_id', userId)
+          .in('following_id', authorIds)
+        followingSet = new Set((follows || []).map((row) => row.following_id))
+      }
+
       // Rank by relevance
       const ranked = (posts || [])
+        .filter((post: any) => {
+          const author = post.user
+          if (!author?.is_private) return true
+          if (!userId) return false
+          return author.id === userId || followingSet.has(author.id)
+        })
         .map(p => ({
           ...p,
+          is_following_author: !!(p.user?.id && followingSet.has(p.user.id)),
           _score: (
             (p.content?.toLowerCase().includes(cleanQ.toLowerCase()) ? 10 : 0) +
             (p.tags?.includes(cleanQ.toLowerCase()) ? 15 : 0) +  // exact tag match = higher
+            (p.user?.username?.toLowerCase() === cleanQ.toLowerCase() ? 20 : 0) +
+            (p.user?.display_name?.toLowerCase() === cleanQ.toLowerCase() ? 15 : 0) +
+            (p.user?.id && followingSet.has(p.user.id) ? 18 : 0) +
+            (userCity && p.user?.city && userCity === p.user.city ? 6 : 0) +
+            (p.image_url ? 2 : 0) +
+            (p.is_mystery ? 2 : 0) +
             (p.view_count > 100 ? 5 : 0) +
             ((Date.now() - new Date(p.created_at).getTime()) < 86400000 ? 3 : 0)  // fresh
           )
@@ -90,30 +116,52 @@ export async function GET(req: NextRequest) {
         .order('created_at', { ascending: false })
         .limit(type === 'all' ? Math.ceil(limit * 0.3) : limit)
 
-      // Add is_following status if logged in
       if (userId && people?.length) {
-        const userIds = people.map(p => p.id)
-        const { data: follows } = await supabase
-          .from('follows')
-          .select('following_id')
-          .eq('follower_id', userId)
-          .in('following_id', userIds)
-        const followingSet = new Set((follows || []).map(f => f.following_id))
-        results.people = people.map(p => ({ ...p, is_following: followingSet.has(p.id) }))
-      } else {
-        // Add is_following status for logged-in users
-      if (userId && people?.length) {
-        const pIds = people.map((p: any) => p.id)
-        const { data: myFollows } = await supabase
-          .from('follows').select('following_id').eq('follower_id', userId).in('following_id', pIds)
-        const followSet = new Set((myFollows || []).map((f: any) => f.following_id))
-        results.people = (people || []).map((p: any) => ({
-          ...p,
-          is_following: followSet.has(p.id)
-        }))
+        const personIds = people.map((person) => person.id)
+        const [{ data: follows }, { data: followers }] = await Promise.all([
+          supabase
+            .from('follows')
+            .select('following_id')
+            .eq('follower_id', userId)
+            .in('following_id', personIds),
+          supabase
+            .from('follows')
+            .select('follower_id')
+            .eq('following_id', userId)
+            .in('follower_id', personIds),
+        ])
+
+        const followingSet = new Set((follows || []).map((row) => row.following_id))
+        const followerSet = new Set((followers || []).map((row) => row.follower_id))
+
+        results.people = (people || [])
+          .map((person: any) => {
+            const username = String(person.username || '').toLowerCase()
+            const displayName = String(person.display_name || person.full_name || '').toLowerCase()
+            const query = cleanQ.toLowerCase()
+            const isFollowing = followingSet.has(person.id)
+            const followsYou = followerSet.has(person.id)
+            const score =
+              (username === query ? 80 : 0) +
+              (displayName === query ? 60 : 0) +
+              (username.startsWith(query) ? 30 : 0) +
+              (displayName.startsWith(query) ? 25 : 0) +
+              (isFollowing ? 25 : 0) +
+              (followsYou ? 15 : 0) +
+              (userCity && person.city && userCity === person.city ? 8 : 0) +
+              (person.is_verified ? 4 : 0)
+
+            return {
+              ...person,
+              is_following: isFollowing,
+              follows_you: followsYou,
+              _score: score,
+            }
+          })
+          .sort((a: any, b: any) => b._score - a._score)
+          .map(({ _score, ...person }: any) => person)
       } else {
         results.people = people || []
-      }
       }
     }
 

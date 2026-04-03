@@ -23,12 +23,20 @@ export async function GET(req: NextRequest, { params }: Ctx) {
 
     const { data: post, error } = await admin
       .from('posts')
-      .select('*, user:users(id,username,display_name,avatar_url,is_verified,city)')
+      .select('*')
       .eq('id', params.id)
       .eq('is_deleted', false)
-      .single()
+      .maybeSingle()
 
     if (error || !post) return NextResponse.json({ error: 'Post not found' }, { status: 404 })
+
+    const { data: user } = post.user_id
+      ? await admin
+          .from('users')
+          .select('id, username, full_name, display_name, avatar_url, is_verified, city')
+          .eq('id', post.user_id)
+          .maybeSingle()
+      : { data: null as any }
 
     const { data: reactions } = await admin
       .from('reactions').select('type, user_id').eq('post_id', params.id)
@@ -55,7 +63,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       }
     }
 
-    admin.rpc('increment_view_count', { p_post_id: params.id })
+    admin.rpc('increment_post_view', { p_post_id: params.id, p_user_id: userId })
       .then(() => {})
       .catch(() => {
         // Fallback if RPC doesn't exist
@@ -64,16 +72,22 @@ export async function GET(req: NextRequest, { params }: Ctx) {
           .eq('id', params.id).then(() => {})
       })
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       data: {
         ...post,
+        user,
         content: post.is_mystery && !has_revealed ? null : post.content,
         image_url: post.is_mystery && !has_revealed ? null : post.image_url,
+        video_url: post.is_mystery && !has_revealed ? null : post.video_url,
+        video_thumbnail_url: post.is_mystery && !has_revealed ? null : post.video_thumbnail_url,
+        gif_url: post.is_mystery && !has_revealed ? null : post.gif_url,
         reaction_counts,
         comment_count: comment_count ?? 0,
         user_reaction,
         has_revealed }
     })
+    res.headers.set('Cache-Control', 'no-store')
+    return res
   } catch (err: any) {
     console.error('[posts/[id] GET]', err.message)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })

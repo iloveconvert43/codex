@@ -8,8 +8,10 @@ import { checkRateLimit } from '@/lib/redis'
 import {
   ALLOWED_IMAGE_TYPES,
   ALLOWED_VIDEO_TYPES,
+  ALLOWED_AUDIO_TYPES,
   IMAGE_MAX_BYTES,
   VIDEO_MAX_BYTES,
+  AUDIO_MAX_BYTES,
   generateFileName,
   getFolder,
 } from '@/lib/imagekit'
@@ -47,11 +49,12 @@ export async function POST(req: NextRequest) {
 
     const isImage = ALLOWED_IMAGE_TYPES.includes(file.type)
     const isVideo = ALLOWED_VIDEO_TYPES.includes(file.type)
-    if (!isImage && !isVideo) {
+    const isAudio = ALLOWED_AUDIO_TYPES.includes(file.type)
+    if (!isImage && !isVideo && !isAudio) {
       return NextResponse.json({ error: `File type "${file.type}" not allowed.` }, { status: 400 })
     }
 
-    const maxBytes = isImage ? IMAGE_MAX_BYTES : VIDEO_MAX_BYTES
+    const maxBytes = isImage ? IMAGE_MAX_BYTES : isVideo ? VIDEO_MAX_BYTES : AUDIO_MAX_BYTES
     if (file.size > maxBytes) {
       return NextResponse.json({ error: `File too large.` }, { status: 400 })
     }

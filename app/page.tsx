@@ -22,6 +22,15 @@ function FeedPage() {
   const [filter, setFilter]           = useState<FeedFilter>('global')
   const [selectedCity, setSelectedCity] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('posted')) return
+    url.searchParams.delete('posted')
+    const search = url.searchParams.toString()
+    window.history.replaceState({}, '', `${url.pathname}${search ? `?${search}` : ''}${url.hash}`)
+  }, [])
+
   function handleFilterChange(newFilter: FeedFilter, city?: string) {
     setFilter(newFilter)
     if (city) setSelectedCity(city)

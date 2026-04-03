@@ -17,6 +17,7 @@ import Image from 'next/image'
 import TopBar from '@/components/layout/TopBar'
 import { usePendingUserPosts } from '@/hooks/usePendingPosts'
 import { mergePostsWithPending } from '@/lib/pendingPosts'
+import { useRealtimePostCounts } from '@/hooks/useRealtimePostCounts'
 
 const BADGE_LABELS: Record<string, string> = {
   streak_7: '🔥 7-Day Streak',
@@ -46,6 +47,11 @@ function OwnAvatar({ profile, size = 86 }: { profile: any; size?: number }) {
 }
 
 function PostCard({ post }: { post: any }) {
+  const liveCounts = useRealtimePostCounts(post.id, {
+    reaction_count: post.reaction_count ?? 0,
+    comment_count: post.comment_count ?? 0,
+    latest_comment: post.latest_comment ?? null,
+  }, { fallbackPollMs: 10000 })
   const statusParts: string[] = []
   if (post.feeling_emoji) statusParts.push(`${post.feeling_emoji} feeling ${post.feeling || ''}`)
   if (post.activity_emoji) statusParts.push(`${post.activity_emoji} ${post.activity || ''}${post.activity_detail ? ' ' + post.activity_detail : ''}`)
@@ -54,6 +60,8 @@ function PostCard({ post }: { post: any }) {
     statusParts.push(`${post.life_event_emoji} ${(post.life_event_type || '').replace(/_/g, ' ')}`)
   }
   const statusLine = statusParts.join(' · ')
+  const displayedReactionCount = liveCounts.reaction_count ?? post.reaction_count ?? 0
+  const displayedCommentCount = liveCounts.comment_count ?? post.comment_count ?? 0
 
   return (
     <Link href={`/post/${post.id}`}
@@ -82,8 +90,8 @@ function PostCard({ post }: { post: any }) {
         ) : null}
         <div className="flex items-center gap-4 mt-2 text-xs text-text-muted">
           <span>{getRelativeTime(post.created_at)}</span>
-          {(post.reaction_count ?? 0) > 0 && <span>✨ {post.reaction_count}</span>}
-          {(post.comment_count ?? 0) > 0 && <span>💬 {post.comment_count}</span>}
+          {displayedReactionCount > 0 && <span>✨ {displayedReactionCount}</span>}
+          {displayedCommentCount > 0 && <span>💬 {displayedCommentCount}</span>}
         </div>
       </div>
     </Link>

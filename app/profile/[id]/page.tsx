@@ -140,7 +140,7 @@ export default function ProfileDetailPage() {
   const { data: fullData, mutate, isLoading } = useSWR(
     id ? `/api/users/${id}/full` : null,
     swrFetcher,
-    { revalidateOnFocus: true, errorRetryCount: 2, refreshInterval: 15000 }
+    { revalidateOnFocus: true, revalidateOnMount: true, dedupingInterval: 0, errorRetryCount: 2, refreshInterval: 15000 }
   )
 
   // Realtime follower count updates

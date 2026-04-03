@@ -29,6 +29,10 @@ export async function GET(req: NextRequest) {
     }
 
     const isOwnProfile = viewerId === targetId
+    const { data: followRow } = viewerId && !isOwnProfile
+      ? await supabase.from('follows').select('follower_id').eq('follower_id', viewerId).eq('following_id', targetId).maybeSingle()
+      : { data: null as any }
+    const isFollower = !!followRow
 
     // Fetch user base profile
     const { data: user, error } = await supabase
@@ -47,26 +51,27 @@ export async function GET(req: NextRequest) {
     if (error || !user) return NextResponse.json({ error: 'User not found' }, { status: 404 })
 
     const privacy: Record<string, string> = (user as any).privacy_settings || {}
-    const canView = (field: string) => {
-      const vis = privacy[field] || 'public'
+    const canView = (field: string, fallback: 'public' | 'followers' | 'private' = 'public') => {
+      const vis = (privacy[field] || fallback) as 'public' | 'followers' | 'private'
+      if (isOwnProfile) return true
       if (vis === 'public') return true
-      if (vis === 'followers') {
-        // Check if viewer follows target
-        return isOwnProfile  // simplified; proper check done async below
-      }
-      return isOwnProfile
+      if (vis === 'followers') return isFollower
+      return false
     }
+
+    const visibleWorkScopes = isOwnProfile ? ['public', 'followers', 'private'] : isFollower ? ['public', 'followers'] : ['public']
+    const visibleEducationScopes = visibleWorkScopes
 
     // Fetch work, education, interests, links in parallel
     const [workRes, eduRes, interestsRes, linksRes] = await Promise.all([
       supabase.from('profile_work')
         .select('*').eq('user_id', targetId)
-        .in('visibility', isOwnProfile ? ['public','followers','private'] : ['public'])
+        .in('visibility', visibleWorkScopes)
         .order('is_current', { ascending: false })
         .order('display_order'),
       supabase.from('profile_education')
         .select('*').eq('user_id', targetId)
-        .in('visibility', isOwnProfile ? ['public','followers','private'] : ['public'])
+        .in('visibility', visibleEducationScopes)
         .order('is_current', { ascending: false })
         .order('display_order'),
       supabase.from('profile_interests')
@@ -86,17 +91,47 @@ export async function GET(req: NextRequest) {
       supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', targetId),
     ])
 
-    return NextResponse.json({
+    const currentCityVisible = canView('show_current_city', 'public')
+    const hometownVisible = canView('show_hometown', 'public')
+    const dobVisible = canView('show_dob', 'private')
+    const genderVisible = canView('show_gender', 'private')
+    const relationshipVisible = canView('show_relationship', 'followers')
+    const nationalityVisible = canView('show_nationality', 'public')
+    const socialVisible = canView('show_social', 'followers')
+    const workVisible = canView('show_work', 'public')
+    const educationVisible = canView('show_education', 'public')
+    const interestsVisible = canView('show_interests', 'public')
+    const linksVisible = canView('show_links', 'public')
+
+    const filteredUser = {
+      ...user,
+      city: currentCityVisible ? (user.current_city || user.city || null) : null,
+      current_city: currentCityVisible ? (user.current_city || user.city || null) : null,
+      hometown: hometownVisible ? user.hometown : null,
+      dob: dobVisible ? user.dob : null,
+      gender: genderVisible ? user.gender : null,
+      nationality: nationalityVisible ? user.nationality : null,
+      relationship_status: relationshipVisible ? user.relationship_status : null,
+      website_url: linksVisible ? user.website_url : null,
+      social_instagram: socialVisible ? user.social_instagram : null,
+      social_twitter: socialVisible ? user.social_twitter : null,
+      social_linkedin: socialVisible ? user.social_linkedin : null,
+      social_youtube: socialVisible ? user.social_youtube : null,
+    }
+
+    const res = NextResponse.json({
       data: {
-        ...user,
-        work:         workRes.data || [],
-        education:    eduRes.data || [],
-        interests:    interestsRes.data || null,
-        links:        linksRes.data || [],
+        ...filteredUser,
+        work:         workVisible ? (workRes.data || []) : [],
+        education:    educationVisible ? (eduRes.data || []) : [],
+        interests:    interestsVisible ? (interestsRes.data || null) : null,
+        links:        linksVisible ? (linksRes.data || []) : [],
         post_count:   postCount || 0,
         follower_count:  followerCount || 0,
         following_count: followingCount || 0 }
     })
+    res.headers.set('Cache-Control', 'no-store')
+    return res
   } catch (err: any) {
     console.error('[extended-profile GET]', err.message)
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
@@ -221,7 +256,9 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true })
+    const res = NextResponse.json({ ok: true })
+    res.headers.set('Cache-Control', 'no-store')
+    return res
   } catch (err: any) {
     console.error('[extended-profile PATCH]', err.message)
     return NextResponse.json({ error: 'Failed to update' }, { status: 500 })

@@ -179,6 +179,10 @@ export function buildLatestCommentPreview(comment: Comment | PostCommentPreview)
     content: comment.content,
     created_at: comment.created_at,
     is_anonymous: comment.is_anonymous ?? false,
+    image_url: comment.image_url ?? null,
+    video_url: comment.video_url ?? null,
+    video_thumbnail_url: comment.video_thumbnail_url ?? null,
+    gif_url: comment.gif_url ?? null,
     user: comment.is_anonymous ? null : (comment.user || null),
   }
 }

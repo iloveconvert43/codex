@@ -31,6 +31,15 @@ interface FeedPage {
 const feedFetcher = (url: string) => swrFetcher<FeedPage>(url)
 const FEED_REFRESH_KEY = 'hushly-feed-refresh'
 
+function isConfirmedFeedPost(post: Post | null | undefined) {
+  if (!post?.id) return false
+  return !!(
+    post.user ||
+    post.reaction_counts ||
+    typeof post.comment_count === 'number'
+  )
+}
+
 function prependPostToPages(pages: FeedPage[] | undefined, post: Post): FeedPage[] {
   if (!pages || pages.length === 0) {
     return [{ data: [post], hasMore: false, nextCursor: post.created_at ?? null }]
@@ -146,10 +155,15 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
       return
     }
 
-    const serverIds = data.flatMap((page) => (page.data ?? []).map((post) => post.id))
+    const confirmedServerIds = new Set(
+      data
+        .flatMap((page) => page.data ?? [])
+        .filter((post) => isConfirmedFeedPost(post))
+        .map((post) => post.id)
+    )
     const matchedPendingIds = pendingPosts
       .map((post) => post.id)
-      .filter((id) => serverIds.includes(id))
+      .filter((id) => confirmedServerIds.has(id))
     if (!matchedPendingIds.length) return
 
     if (freshNonceRef.current) {

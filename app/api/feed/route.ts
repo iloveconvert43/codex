@@ -64,8 +64,8 @@ export async function GET(req: NextRequest) {
     // ── Redis cache check ──────────────────────────────────
     // Skip caching the first page so newly created posts appear immediately
     // after redirect or refresh, Facebook-style.
-    const cacheKey = `feed:${filter}:${userId || 'anon'}:${cityParam || userCity || ''}:${cursor || ''}:v2`
-    const shouldUseCache = !!cursor
+    const shouldUseCache = false
+    const cacheKey = ''
     if (shouldUseCache) {
       const cached = await getCachedFeed(cacheKey)
       if (cached) {

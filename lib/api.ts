@@ -81,9 +81,14 @@ export async function apiFetch<T = any>(
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeout)
+  const requestOptions: RequestInit = { ...fetchOptions, headers, signal: controller.signal }
+
+  if (isReadRequest && !requestOptions.cache && url.startsWith('/api/')) {
+    requestOptions.cache = 'no-store'
+  }
 
   try {
-    const res = await fetch(url, { ...fetchOptions, headers, signal: controller.signal })
+    const res = await fetch(url, requestOptions)
     clearTimeout(timer)
 
     if (res.status === 401) {
@@ -94,7 +99,7 @@ export async function apiFetch<T = any>(
       // This prevents "post not found" errors when token is stale
       if (isReadRequest && !requireAuth) {
         const { Authorization: _, ...headersNoAuth } = headers
-        const retryRes = await fetch(url, { ...fetchOptions, headers: headersNoAuth })
+        const retryRes = await fetch(url, { ...requestOptions, headers: headersNoAuth })
         if (retryRes.ok) {
           const ct = retryRes.headers.get('content-type')
           return (ct?.includes('application/json') ? await retryRes.json() : await retryRes.text()) as T
@@ -111,7 +116,7 @@ export async function apiFetch<T = any>(
             const payload = JSON.parse(atob(refreshed.session.access_token.split('.')[1]))
             _tokenExpiry = (payload.exp || 0) * 1000
             const retryHeaders = { ...headers, Authorization: `Bearer ${refreshed.session.access_token}` }
-            const retryRes = await fetch(url, { ...fetchOptions, headers: retryHeaders })
+            const retryRes = await fetch(url, { ...requestOptions, headers: retryHeaders })
             if (retryRes.ok) {
               const ct = retryRes.headers.get('content-type')
               return (ct?.includes('application/json') ? await retryRes.json() : await retryRes.text()) as T

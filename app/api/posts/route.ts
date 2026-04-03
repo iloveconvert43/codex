@@ -8,7 +8,7 @@ import { sanitizeText, sanitizeTags } from '@/lib/sanitize'
 import { rateLimit } from '@/lib/security'
 import { awardPoints } from '@/lib/points'
 import { queuePush } from '@/lib/push'
-import { invalidateProfile } from '@/lib/redis'
+import { invalidateFeed, invalidateProfile } from '@/lib/redis'
 
 // Simple in-memory rate limiter (production: use Upstash Redis)
 const rateLimitMap = new Map<string, { count: number; reset: number }>()
@@ -229,6 +229,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  invalidateFeed(profile.id, profile.city || city || undefined).catch(() => {})
   invalidateProfile(profile.id).catch(() => {})
 
   const responsePost = {

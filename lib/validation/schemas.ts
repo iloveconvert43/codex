@@ -40,9 +40,18 @@ export const createPostSchema = z.object({
 
 // ── Comments ─────────────────────────────────────────────
 export const createCommentSchema = z.object({
-  content: z.string().min(1).max(500).trim(),
+  content: z.string().max(500).trim().optional().default(''),
   parent_id: z.string().uuid().nullable().optional(),
-  is_anonymous: z.boolean().default(false) })
+  is_anonymous: z.boolean().default(false),
+  image_url: z.string().url().nullable().optional(),
+  video_url: z.string().url().nullable().optional(),
+  video_thumbnail_url: z.string().url().nullable().optional(),
+  gif_url: z.string().url().nullable().optional(),
+  mentioned_user_ids: z.array(z.string().uuid()).max(10).optional().default([]),
+}).refine(
+  d => !!(d.content?.trim() || d.image_url || d.video_url || d.gif_url),
+  { message: 'Comment must have text, image, video, or GIF' }
+)
 
 // ── Messages ──────────────────────────────────────────────
 export const sendMessageSchema = z.object({

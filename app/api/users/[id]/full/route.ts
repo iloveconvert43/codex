@@ -24,21 +24,41 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       try { return await fn() } catch { return { data: null, count: 0, error: null } }
     }
 
-    const basePostSelect = 'id,content,created_at,view_count,is_anonymous,is_mystery,image_url,video_url,gif_url,feeling,feeling_emoji,activity,activity_emoji,activity_detail,location_name,is_life_event,life_event_type,life_event_emoji,scope'
-    const fallbackPostSelect = 'id,content,created_at,view_count,is_anonymous,is_mystery,image_url,video_url,feeling,feeling_emoji,activity,activity_emoji,activity_detail,location_name,is_life_event,life_event_type,life_event_emoji,scope'
+    const corePostSelect = 'id,user_id,content,created_at,updated_at,view_count,is_anonymous,is_mystery,image_url,video_url,video_thumbnail_url,tags,city,latitude,longitude'
+    const optionalPostSelect = 'id,gif_url,feeling,feeling_emoji,activity,activity_emoji,activity_detail,location_name,is_life_event,life_event_type,life_event_emoji,scope'
 
     const queryProfilePosts = async () => {
-      const run = async (select: string) => supabase.from('posts')
-        .select(select)
+      const { data: corePosts, error: coreError } = await supabase.from('posts')
+        .select(corePostSelect)
         .eq('user_id', params.id)
         .eq('is_deleted', false)
         .order('created_at', { ascending: false })
         .limit(20)
 
-      const primary = await run(basePostSelect)
-      if (!primary.error) return primary
-      if (!primary.error.message?.includes('does not exist')) return primary
-      return run(fallbackPostSelect)
+      if (coreError) throw coreError
+      const basePosts = corePosts || []
+      if (!basePosts.length) {
+        return { data: [], error: null }
+      }
+
+      const postIds = basePosts.map((post: any) => post.id)
+      const { data: optionalPosts, error: optionalError } = await supabase.from('posts')
+        .select(optionalPostSelect)
+        .in('id', postIds)
+
+      if (optionalError) {
+        console.warn('[users/full] optional post fields unavailable, using core fields only:', optionalError.message)
+        return { data: basePosts, error: null }
+      }
+
+      const optionalMap = new Map((optionalPosts || []).map((post: any) => [post.id, post]))
+      return {
+        data: basePosts.map((post: any) => ({
+          ...post,
+          ...(optionalMap.get(post.id) || {}),
+        })),
+        error: null,
+      }
     }
 
     const [userRes, followerRes, followingRes, pointsRes, postsRes, followRes] = await Promise.all([
@@ -60,7 +80,10 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       return r
     }
 
-    const posts = (postsRes.data || []).filter((p: any) => isOwner || !p.is_anonymous)
+    const canViewPosts = isOwner || !userRes.data.is_private || !!followRes.data
+    const posts = canViewPosts
+      ? (postsRes.data || []).filter((p: any) => isOwner || !p.is_anonymous)
+      : []
     let enrichedPosts = posts
 
     if (posts.length > 0) {

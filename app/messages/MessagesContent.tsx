@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import {
   ArrowLeft, Send, Loader2, MessageCircle, Check, CheckCheck,
-  Phone, Video, MoreVertical, Smile, Trash2,
+  Phone, Video, MoreVertical, Smile, Trash2, Mic, Square,
   MoreHorizontal, Search, ImagePlus, ThumbsUp, X
 } from 'lucide-react'
 import Link from 'next/link'
@@ -23,6 +23,21 @@ import { sendMessageSchema, validate } from '@/lib/validation/schemas'
 import { analytics } from '@/lib/analytics'
 import { cn } from '@/lib/utils'
 import { getDirectMessagePreview, isDirectMessageDeletedForEveryone, normalizeDirectMessageAttachments } from '@/lib/direct-messages'
+
+const EMOJI_GROUPS = [
+  { title: 'Smileys', items: ['😀','😃','😄','😁','😆','😅','😂','🤣','🥹','😊','🙂','😉','😍','😘','😎','🤩','🥳','😇'] },
+  { title: 'Feelings', items: ['😔','😢','😭','😡','😤','🤯','😴','🤔','🙄','😬','🤭','😮','😲','😌','😇','🫠','🥺','😵'] },
+  { title: 'Gestures', items: ['👍','👎','👏','🙏','🤝','💪','🙌','👌','✌️','🤞','🫶','👀','👋','🤟','💯','🔥','✨','🎉'] },
+  { title: 'Love', items: ['❤️','🩷','🧡','💛','💚','🩵','💙','💜','🤍','🖤','💕','💞','💓','💗','💘','💝','💖','💌'] },
+  { title: 'Fun', items: ['😋','😜','😝','🤪','😛','🤓','😏','😈','👻','🤖','🎭','🎊','🎶','⭐','🌈','☀️','🌙','⚡'] },
+]
+
+function formatAudioDuration(seconds?: number | null) {
+  if (!seconds || Number.isNaN(seconds)) return '0:00'
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.round(seconds % 60)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
 
 
 function formatChatTime(value: string | number | Date | null | undefined): string {
@@ -378,14 +393,15 @@ type PendingMedia = {
   id: string
   file: File
   previewUrl: string
-  type: 'image' | 'video'
+  type: 'image' | 'video' | 'audio'
+  durationSec?: number | null
 }
 
 function MessageAttachments({
   attachments,
   isMine,
 }: {
-  attachments: Array<{ type: 'image' | 'video'; url: string; thumbnail_url?: string | null }>
+  attachments: Array<{ type: 'image' | 'video' | 'audio'; url: string; thumbnail_url?: string | null; duration_sec?: number | null }>
   isMine: boolean
 }) {
   if (!attachments.length) return null
@@ -410,6 +426,22 @@ function MessageAttachments({
               playsInline
               className={cn('w-full h-full object-cover', attachments.length === 1 ? 'max-h-80' : '')}
             />
+          </div>
+        ) : item.type === 'audio' ? (
+          <div
+            key={`${item.url}-${index}`}
+            className={cn(
+              'relative overflow-hidden rounded-[20px] border p-3',
+              attachments.length === 1 ? 'max-w-sm' : 'col-span-2',
+              isMine ? 'border-white/20 bg-white/10' : 'border-border bg-bg-card'
+            )}
+          >
+            <div className="flex items-center gap-2 mb-2 text-xs font-medium opacity-80">
+              <Mic size={13} />
+              <span>Voice message</span>
+              {item.duration_sec ? <span>{formatAudioDuration(item.duration_sec)}</span> : null}
+            </div>
+            <audio src={item.url} controls className="w-full max-w-sm" />
           </div>
         ) : (
           <a
@@ -768,12 +800,20 @@ function ChatArea({ userId }: { userId: string }) {
   const [isNearBottom, setIsNearBottom] = useState(true)
   const [selectedMedia, setSelectedMedia] = useState<PendingMedia[]>([])
   const [activeMessage, setActiveMessage] = useState<any | null>(null)
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingSec, setRecordingSec] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const channelRef = useRef<any>(null)
   const selectedMediaRef = useRef<PendingMedia[]>([])
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const recordStreamRef = useRef<MediaStream | null>(null)
+  const recordChunksRef = useRef<Blob[]>([])
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [otherTyping, setOtherTyping] = useState(false)
   const [myTyping, setMyTyping] = useState(false)
 
@@ -804,6 +844,8 @@ function ChatArea({ userId }: { userId: string }) {
   useEffect(() => {
     return () => {
       selectedMediaRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl))
+      recordStreamRef.current?.getTracks().forEach((track) => track.stop())
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current)
     }
   }, [])
 
@@ -897,11 +939,121 @@ function ChatArea({ userId }: { userId: string }) {
     })
   }
 
+  function appendEmoji(emoji: string) {
+    const textarea = textareaRef.current
+    if (!textarea) {
+      handleTyping(`${message}${emoji}`)
+      return
+    }
+
+    const start = textarea.selectionStart ?? message.length
+    const end = textarea.selectionEnd ?? message.length
+    const nextValue = `${message.slice(0, start)}${emoji}${message.slice(end)}`
+    handleTyping(nextValue)
+
+    requestAnimationFrame(() => {
+      const nextTextarea = textareaRef.current
+      if (!nextTextarea) return
+      const nextPos = start + emoji.length
+      nextTextarea.focus()
+      nextTextarea.setSelectionRange(nextPos, nextPos)
+    })
+  }
+
+  async function startVoiceRecording() {
+    if (isRecording || sending || uploading) return
+    if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      toast.error('Voice recording is not supported on this device')
+      return
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      recordStreamRef.current = stream
+      recordChunksRef.current = []
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/mp4')
+          ? 'audio/mp4'
+          : ''
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      recorderRef.current = recorder
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordChunksRef.current.push(event.data)
+        }
+      }
+      recorder.start()
+      setRecordingSec(0)
+      setIsRecording(true)
+      setEmojiOpen(false)
+      recordTimerRef.current = setInterval(() => {
+        setRecordingSec((value) => value + 1)
+      }, 1000)
+    } catch (error) {
+      toast.error('Microphone permission is required for voice messages')
+    }
+  }
+
+  async function stopVoiceRecording(save: boolean) {
+    const recorder = recorderRef.current
+    if (!recorder) return
+
+    const finalize = async () => {
+      if (recordTimerRef.current) {
+        clearInterval(recordTimerRef.current)
+        recordTimerRef.current = null
+      }
+      setIsRecording(false)
+
+      const stream = recordStreamRef.current
+      stream?.getTracks().forEach((track) => track.stop())
+      recordStreamRef.current = null
+      recorderRef.current = null
+
+      if (!save) {
+        recordChunksRef.current = []
+        setRecordingSec(0)
+        return
+      }
+
+      const blob = new Blob(recordChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+      recordChunksRef.current = []
+      if (!blob.size) {
+        toast.error('Voice recording was empty')
+        setRecordingSec(0)
+        return
+      }
+
+      const ext = (recorder.mimeType || 'audio/webm').includes('mp4') ? 'm4a' : 'webm'
+      const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: recorder.mimeType || 'audio/webm' })
+      const previewUrl = URL.createObjectURL(blob)
+      setSelectedMedia((current) => {
+        if (current.length >= 8) {
+          URL.revokeObjectURL(previewUrl)
+          toast.error('You can send up to 8 attachments at once')
+          return current
+        }
+        return [...current, {
+          id: `${file.name}-${Date.now()}`,
+          file,
+          previewUrl,
+          type: 'audio',
+          durationSec: recordingSec,
+        }]
+      })
+      setRecordingSec(0)
+    }
+
+    recorder.onstop = () => { finalize() }
+    recorder.stop()
+  }
+
   async function handleMediaSelection(fileList: FileList | null) {
     if (!fileList) return
     const nextFiles = Array.from(fileList)
     if (selectedMedia.length + nextFiles.length > 8) {
-      toast.error('You can send up to 8 photos or videos at once')
+      toast.error('You can send up to 8 attachments at once')
     }
 
     const limited = nextFiles.slice(0, Math.max(0, 8 - selectedMedia.length))
@@ -956,7 +1108,7 @@ function ChatArea({ userId }: { userId: string }) {
 
     try {
       const { compressImage } = await import('@/lib/media')
-      const attachments: Array<{ type: 'image' | 'video'; url: string; thumbnail_url?: string | null }> = []
+      const attachments: Array<{ type: 'image' | 'video' | 'audio'; url: string; thumbnail_url?: string | null; duration_sec?: number | null }> = []
 
       for (const item of previousMedia) {
         let fileToUpload = item.file
@@ -967,11 +1119,13 @@ function ChatArea({ userId }: { userId: string }) {
           } catch {}
         }
 
-        const uploadResult = await uploadToImageKit(fileToUpload, item.type === 'video' ? 'videos' : 'images')
+        const uploadType = item.type === 'video' ? 'videos' : item.type === 'audio' ? 'audio' : 'images'
+        const uploadResult = await uploadToImageKit(fileToUpload, uploadType)
         attachments.push({
           type: item.type,
           url: uploadResult.url,
           thumbnail_url: item.type === 'video' ? (uploadResult.thumbnailUrl || null) : null,
+          duration_sec: item.type === 'audio' ? (item.durationSec || null) : null,
         })
       }
 
@@ -1245,13 +1399,59 @@ function ChatArea({ userId }: { userId: string }) {
           <p className="text-sm text-text-muted">🚫 Cannot send messages to this user</p>
         </div>
       ) : (
-        <div className="border-t border-border bg-bg/95 backdrop-blur-xl px-4 py-3">
+        <div className="relative border-t border-border bg-bg/95 backdrop-blur-xl px-4 py-3">
+          {emojiOpen && (
+            <div className="absolute bottom-[100%] left-4 right-4 mb-3 glass-card rounded-[24px] p-4 shadow-2xl z-20">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold">Emoji</p>
+                <button onClick={() => setEmojiOpen(false)} className="text-text-muted hover:text-text">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="space-y-4 max-h-64 overflow-y-auto hide-scrollbar pr-1">
+                {EMOJI_GROUPS.map((group) => (
+                  <div key={group.title}>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-muted mb-2">
+                      {group.title}
+                    </p>
+                    <div className="grid grid-cols-6 gap-2">
+                      {group.items.map((emoji) => (
+                        <button
+                          key={`${group.title}-${emoji}`}
+                          onClick={() => appendEmoji(emoji)}
+                          className="h-10 rounded-2xl bg-bg-card2 hover:bg-primary/10 text-xl transition-colors"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {selectedMedia.length > 0 && (
             <div className="mb-3 flex gap-2 overflow-x-auto hide-scrollbar">
               {selectedMedia.map((item) => (
-                <div key={item.id} className="relative w-24 h-24 rounded-[18px] overflow-hidden border border-border bg-bg-card2 flex-shrink-0">
+                <div
+                  key={item.id}
+                  className={cn(
+                    'relative rounded-[18px] overflow-hidden border border-border bg-bg-card2 flex-shrink-0',
+                    item.type === 'audio' ? 'w-44 min-h-[112px] p-3' : 'w-24 h-24'
+                  )}
+                >
                   {item.type === 'video' ? (
                     <video src={item.previewUrl} className="w-full h-full object-cover" muted playsInline />
+                  ) : item.type === 'audio' ? (
+                    <div className="w-full h-full flex flex-col justify-between gap-2">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-text-secondary">
+                        <Mic size={13} />
+                        <span>Voice</span>
+                      </div>
+                      <audio src={item.previewUrl} controls className="w-full" />
+                      <span className="text-[10px] text-text-muted">{formatAudioDuration(item.durationSec)}</span>
+                    </div>
                   ) : (
                     <img src={item.previewUrl} alt="" className="w-full h-full object-cover" />
                   )}
@@ -1284,17 +1484,32 @@ function ChatArea({ userId }: { userId: string }) {
               {uploading ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={18} />}
             </button>
 
+            <button
+              onClick={() => isRecording ? stopVoiceRecording(true) : startVoiceRecording()}
+              disabled={sending || uploading || !composerEnabled}
+              className={cn(
+                'w-11 h-11 rounded-full border flex items-center justify-center transition-all flex-shrink-0',
+                isRecording
+                  ? 'bg-accent-red text-white border-accent-red'
+                  : 'bg-bg-card2 border-border text-text-muted hover:text-primary'
+              )}
+              title={isRecording ? 'Stop recording' : 'Record voice message'}
+            >
+              {isRecording ? <Square size={16} /> : <Mic size={18} />}
+            </button>
+
             <div className="flex-1 rounded-[28px] bg-bg-card2 border border-border px-3 py-2 flex items-end gap-2">
               <button
-                onClick={() => handleTyping(`${message}${message ? ' ' : ''}😊`)}
-                disabled={sending || uploading || !composerEnabled}
+                onClick={() => setEmojiOpen((value) => !value)}
+                disabled={sending || uploading || isRecording || !composerEnabled}
                 className="w-9 h-9 rounded-full flex items-center justify-center text-text-muted hover:text-primary transition-colors flex-shrink-0"
-                title="Add emoji"
+                title="Open emoji picker"
               >
                 <Smile size={18} />
               </button>
 
               <textarea
+                ref={textareaRef}
                 value={message}
                 onChange={(event) => handleTyping(event.target.value)}
                 onKeyDown={(event) => {
@@ -1303,16 +1518,17 @@ function ChatArea({ userId }: { userId: string }) {
                     sendCurrentMessage()
                   }
                 }}
-                placeholder={uploading ? 'Uploading attachments...' : 'Aa'}
+                placeholder={isRecording ? 'Recording voice message…' : uploading ? 'Uploading attachments...' : 'Aa'}
                 rows={1}
                 maxLength={1000}
+                disabled={isRecording}
                 className="flex-1 bg-transparent text-sm outline-none resize-none max-h-32 py-2 leading-5 placeholder:text-text-muted"
               />
             </div>
 
             <button
               onClick={() => hasComposerContent ? sendCurrentMessage() : sendCurrentMessage('👍')}
-              disabled={sending || uploading || !composerEnabled}
+              disabled={sending || uploading || isRecording || !composerEnabled}
               className={cn(
                 'w-11 h-11 rounded-full flex items-center justify-center text-white transition-all flex-shrink-0',
                 hasComposerContent ? 'bg-primary' : 'bg-primary/90'
@@ -1322,6 +1538,22 @@ function ChatArea({ userId }: { userId: string }) {
               {sending ? <Loader2 size={16} className="animate-spin" /> : hasComposerContent ? <Send size={16} /> : <ThumbsUp size={18} />}
             </button>
           </div>
+
+          {isRecording && (
+            <div className="mt-3 flex items-center justify-between rounded-2xl border border-accent-red/30 bg-accent-red/10 px-4 py-2">
+              <div className="flex items-center gap-2 text-sm text-text">
+                <span className="w-2.5 h-2.5 rounded-full bg-accent-red animate-pulse" />
+                Recording voice message
+                <span className="text-text-muted">{formatAudioDuration(recordingSec)}</span>
+              </div>
+              <button
+                onClick={() => stopVoiceRecording(false)}
+                className="text-xs font-semibold text-text-muted hover:text-text"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
       )}
 

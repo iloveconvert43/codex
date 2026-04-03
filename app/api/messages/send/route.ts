@@ -2,10 +2,16 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 10
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createRouteClient } from '@/lib/supabase-server'
+import { createAdminClient, createRouteClient } from '@/lib/supabase-server'
 import { sendMessageSchema, validate } from '@/lib/validation/schemas'
 import { sanitizeInput, rateLimit, getClientIP, isValidUUID } from '@/lib/security'
 import { queuePush } from '@/lib/push'
+import { getDirectMessagePreview, normalizeDirectMessageAttachments } from '@/lib/direct-messages'
+
+function isMissingMessageUpgrade(err: any) {
+  const msg = err?.message || ''
+  return /column .* does not exist|schema cache/i.test(msg)
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -34,7 +40,7 @@ export async function POST(req: NextRequest) {
     const v = validate(sendMessageSchema, rawBody)
     if (!v.success) return NextResponse.json({ error: v.error }, { status: 400 })
 
-    const { to_user_id, content, image_url } = v.data
+    const { to_user_id, content, image_url, video_url, video_thumbnail_url, attachments: rawAttachments } = v.data
 
     // UUID validation
     if (!isValidUUID(to_user_id)) {
@@ -46,7 +52,14 @@ export async function POST(req: NextRequest) {
 
     // Sanitize message content
     const sanitizedContent = sanitizeInput(content || '')
-    if (!sanitizedContent && !image_url) {
+    const attachments = normalizeDirectMessageAttachments({
+      attachments: rawAttachments,
+      image_url,
+      video_url,
+      video_thumbnail_url,
+    })
+
+    if (!sanitizedContent && attachments.length === 0) {
       return NextResponse.json({ error: 'Message cannot be empty' }, { status: 400 })
     }
 
@@ -85,10 +98,42 @@ export async function POST(req: NextRequest) {
     }
     // 'free' or 'request_accepted' → proceed
 
-    const { data, error } = await supabase.from('direct_messages')
-      .insert({ sender_id: me.id, receiver_id: to_user_id, content: sanitizedContent || null, image_url: image_url || null })
+    const firstImage = attachments.find((item) => item.type === 'image') || null
+    const firstVideo = attachments.find((item) => item.type === 'video') || null
+
+    let { data, error } = await supabase.from('direct_messages')
+      .insert({
+        sender_id: me.id,
+        receiver_id: to_user_id,
+        content: sanitizedContent || null,
+        image_url: firstImage?.url || null,
+        video_url: firstVideo?.url || null,
+        video_thumbnail_url: firstVideo?.thumbnail_url || null,
+        attachments,
+      })
       .select('*, sender:users!sender_id(id,username,display_name,avatar_url)')
       .single()
+
+    if (error && isMissingMessageUpgrade(error)) {
+      if (attachments.length > 1 || firstVideo) {
+        return NextResponse.json({
+          error: 'Messaging upgrade needs the latest SQL migration. Run scripts/messaging-upgrade-v1.sql first.',
+          code: 'MESSAGING_SQL_REQUIRED',
+        }, { status: 409 })
+      }
+
+      const legacyInsert = await supabase.from('direct_messages')
+        .insert({
+          sender_id: me.id,
+          receiver_id: to_user_id,
+          content: sanitizedContent || null,
+          image_url: firstImage?.url || null,
+        })
+        .select('*, sender:users!sender_id(id,username,display_name,avatar_url)')
+        .single()
+      data = legacyInsert.data
+      error = legacyInsert.error
+    }
 
     if (error) throw error
 
@@ -101,7 +146,7 @@ export async function POST(req: NextRequest) {
 
     queuePush(to_user_id, {
       title: 'New message',
-      body: (sanitizedContent || (image_url ? '📷 Photo' : 'New message')).slice(0, 80),
+      body: getDirectMessagePreview({ content: sanitizedContent, attachments }, me.id).slice(0, 80) || 'New message',
       url: `/messages?user=${me.id}` }).then(() => {}).catch(() => {})
 
     return NextResponse.json({ data }, { status: 201 })
@@ -113,7 +158,7 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const supabase = createRouteClient()
+    const supabase = createAdminClient()
     const { getUserIdFromToken: _getUID } = await import('@/lib/jwt')
     const _authId = _getUID(req.headers.get('authorization'))
     const sessionUser = _authId ? { id: _authId } : null
@@ -121,15 +166,64 @@ export async function DELETE(req: NextRequest) {
     if (!sessionUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { data: me } = await supabase.from('users').select('id').eq('auth_id', sessionUser.id).single()
     if (!me) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    const { message_id } = await req.json()
+    const { message_id, scope } = await req.json()
     if (!message_id) return NextResponse.json({ error: 'message_id required' }, { status: 400 })
-    // Only allow deleting own messages
     const { data: msg } = await supabase.from('direct_messages')
-      .select('sender_id').eq('id', message_id).single()
-    if (!msg || msg.sender_id !== me.id) {
+      .select('id,sender_id,receiver_id').eq('id', message_id).single()
+    if (!msg || (msg.sender_id !== me.id && msg.receiver_id !== me.id)) {
       return NextResponse.json({ error: 'Cannot delete this message' }, { status: 403 })
     }
-    await supabase.from('direct_messages').update({ is_deleted: true, content: 'Message deleted' }).eq('id', message_id)
+    const deleteScope = scope === 'everyone' ? 'everyone' : 'me'
+
+    if (deleteScope === 'everyone') {
+      if (msg.sender_id !== me.id) {
+        return NextResponse.json({ error: 'Only the sender can remove for everyone' }, { status: 403 })
+      }
+
+      const updatePayload: Record<string, any> = {
+        is_deleted: true,
+        deleted_for_everyone: true,
+        deleted_at: new Date().toISOString(),
+        deleted_by: me.id,
+        content: null,
+        image_url: null,
+      }
+
+      const everyoneDelete = await supabase.from('direct_messages').update({
+        ...updatePayload,
+        video_url: null,
+        video_thumbnail_url: null,
+        attachments: [],
+      }).eq('id', message_id)
+
+      if (everyoneDelete.error && isMissingMessageUpgrade(everyoneDelete.error)) {
+        const legacyDelete = await supabase.from('direct_messages').update({
+          is_deleted: true,
+          content: 'Message deleted',
+        }).eq('id', message_id)
+        if (legacyDelete.error) throw legacyDelete.error
+      } else if (everyoneDelete.error) {
+        throw everyoneDelete.error
+      }
+      return NextResponse.json({ ok: true })
+    }
+
+    const sideColumn = msg.sender_id === me.id ? 'deleted_for_sender' : 'deleted_for_receiver'
+    const { error: updateError } = await supabase.from('direct_messages')
+      .update({ [sideColumn]: true })
+      .eq('id', message_id)
+
+    if (updateError && isMissingMessageUpgrade(updateError)) {
+      if (msg.sender_id !== me.id) {
+        return NextResponse.json({
+          error: 'Delete-for-you needs the latest SQL migration. Run scripts/messaging-upgrade-v1.sql first.',
+          code: 'MESSAGING_SQL_REQUIRED',
+        }, { status: 409 })
+      }
+      await supabase.from('direct_messages').update({ is_deleted: true, content: 'Message deleted' }).eq('id', message_id)
+    } else if (updateError) {
+      throw updateError
+    }
     return NextResponse.json({ ok: true })
   } catch (err: any) {
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
@@ -139,7 +233,7 @@ export async function DELETE(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   // Mark all messages in a conversation as read
   try {
-    const supabase = createRouteClient()
+    const supabase = createAdminClient()
     const { getUserIdFromToken: _getUID } = await import('@/lib/jwt')
     const _authId = _getUID(req.headers.get('authorization'))
     const sessionUser = _authId ? { id: _authId } : null

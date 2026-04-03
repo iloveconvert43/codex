@@ -3,6 +3,7 @@ export const maxDuration = 10
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createRouteClient } from '@/lib/supabase-server'
+import { getDirectMessagePreview } from '@/lib/direct-messages'
 
 export async function GET(req: NextRequest) {
   try {
@@ -17,13 +18,27 @@ export async function GET(req: NextRequest) {
 
     // Fast: get latest message per conversation using efficient query
     // Get distinct conversation partners with their latest message
-    const { data: msgs, error } = await supabase
+    let { data: msgs, error } = await supabase
       .from('direct_messages')
-      .select('id,sender_id,receiver_id,content,created_at,is_read')
-      .or(`sender_id.eq.${me.id},receiver_id.eq.${me.id}`)
-      .eq('is_deleted', false)
+      .select('id,sender_id,receiver_id,content,created_at,is_read,is_deleted,deleted_for_everyone,deleted_by,image_url,video_url,video_thumbnail_url,attachments')
+      .or(
+        `and(sender_id.eq.${me.id},deleted_for_sender.eq.false),` +
+        `and(receiver_id.eq.${me.id},deleted_for_receiver.eq.false)`
+      )
       .order('created_at', { ascending: false })
       .limit(100)  // Much less than before (was 200+200)
+
+    if (error && /column .* does not exist|schema cache/i.test(error.message || '')) {
+      const legacy = await supabase
+        .from('direct_messages')
+        .select('id,sender_id,receiver_id,content,created_at,is_read,is_deleted,image_url')
+        .or(`sender_id.eq.${me.id},receiver_id.eq.${me.id}`)
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false })
+        .limit(100)
+      msgs = legacy.data
+      error = legacy.error
+    }
 
     if (error) return NextResponse.json({ data: [] })
 
@@ -35,7 +50,7 @@ export async function GET(req: NextRequest) {
         convMap.set(otherId, { last_message: msg, unread_count: 0 })
       }
       // Count unread (messages TO me that are unread)
-      if (msg.receiver_id === me.id && !msg.is_read) {
+      if (msg.receiver_id === me.id && !msg.is_read && !msg.deleted_for_everyone && !msg.is_deleted) {
         convMap.get(otherId)!.unread_count++
       }
     }
@@ -54,7 +69,10 @@ export async function GET(req: NextRequest) {
     const data = otherIds
       .map(id => ({
         other_user:   userMap[id] ?? null,
-        last_message: convMap.get(id)!.last_message,
+        last_message: {
+          ...convMap.get(id)!.last_message,
+          preview: getDirectMessagePreview(convMap.get(id)!.last_message, me.id),
+        },
         unread_count: convMap.get(id)!.unread_count,
       }))
       .filter(c => c.other_user)

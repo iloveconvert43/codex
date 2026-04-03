@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import useSWR from 'swr'
+import useSWR, { mutate } from 'swr'
 
 import Link from 'next/link'
 import { ArrowLeft, Send, Loader2, Trash2 } from 'lucide-react'
@@ -20,6 +20,75 @@ import { analytics } from '@/lib/analytics'
 import type { Comment } from '@/types'
 import { usePendingPost } from '@/hooks/usePendingPosts'
 import { removePendingPost } from '@/lib/pendingPosts'
+import { supabase } from '@/lib/supabase'
+
+type CommentFeedPage = {
+  data?: Comment[]
+}
+
+function upsertCommentTree(existing: Comment[], incoming: Comment) {
+  const next = [...existing]
+
+  if (!incoming.parent_id) {
+    const alreadyExists = next.some((comment) => comment.id === incoming.id)
+    if (alreadyExists) return next
+    next.push({ ...incoming, replies: incoming.replies || [] })
+    return next
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  }
+
+  return next.map((comment) => {
+    if (comment.id !== incoming.parent_id) return comment
+    const replies = comment.replies || []
+    if (replies.some((reply) => reply.id === incoming.id)) return comment
+    return {
+      ...comment,
+      replies: [...replies, incoming].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+    }
+  })
+}
+
+function updateFeedCachesForComment(postId: string, createdComment: Comment) {
+  mutate(
+    (key: unknown) => typeof key === 'string' && key.startsWith('/api/feed'),
+    (pages: CommentFeedPage[] | undefined) => {
+      if (!pages) return pages
+      return pages.map((page: any) => ({
+        ...page,
+        data: (page.data || []).map((post: any) => (
+          post.id !== postId
+            ? post
+            : {
+                ...post,
+                comment_count: (post.comment_count || 0) + 1,
+                latest_comment: createdComment.is_anonymous
+                  ? {
+                      id: createdComment.id,
+                      post_id: createdComment.post_id,
+                      user_id: createdComment.user_id,
+                      parent_id: createdComment.parent_id,
+                      content: createdComment.content,
+                      created_at: createdComment.created_at,
+                      is_anonymous: true,
+                      user: null,
+                    }
+                  : {
+                      id: createdComment.id,
+                      post_id: createdComment.post_id,
+                      user_id: createdComment.user_id,
+                      parent_id: createdComment.parent_id,
+                      content: createdComment.content,
+                      created_at: createdComment.created_at,
+                      is_anonymous: false,
+                      user: createdComment.user || null,
+                    },
+              }
+        )),
+      }))
+    },
+    false
+  )
+}
 
 export default function PostPageClient({ id }: { id: string }) {
 
@@ -91,17 +160,80 @@ function PostContent({ postId }: { postId: string }) {
     }).catch(() => {})
   }, [post?.id]) // eslint-disable-line
 
+  useEffect(() => {
+    if (!postId) return
+
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    const refreshThread = () => {
+      if (timeout) clearTimeout(timeout)
+      timeout = setTimeout(() => {
+        void mutateComments()
+        void mutatePost()
+      }, 180)
+    }
+
+    const channel = supabase
+      .channel(`post-thread:${postId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'comments',
+        filter: `post_id=eq.${postId}`,
+      }, () => {
+        refreshThread()
+      })
+      .subscribe()
+
+    return () => {
+      if (timeout) clearTimeout(timeout)
+      supabase.removeChannel(channel)
+    }
+  }, [postId, mutateComments, mutatePost])
+
   async function submitComment() {
     if (!comment.trim()) return
     if (!isLoggedIn) { toast.error('Sign in to comment'); return }
     setLoading(true)
     try {
-      await api.post(`/api/posts/${postId}/comments`, {
+      const response = await api.post<{ data: Comment }>(`/api/posts/${postId}/comments`, {
         content: comment.trim(),
         parent_id: replyTo?.id || null }, { requireAuth: true })
+      const createdComment = response.data
       setComment('')
       setReplyTo(null)
-      mutateComments()
+
+      if (createdComment) {
+        mutateComments((current: any) => ({
+          ...current,
+          data: upsertCommentTree(current?.data || [], { ...createdComment, replies: createdComment.replies || [] }),
+        }), false)
+
+        mutatePost((current: any) => {
+          if (!current?.data) return current
+          return {
+            ...current,
+            data: {
+              ...current.data,
+              comment_count: (current.data.comment_count || 0) + 1,
+              latest_comment: {
+                id: createdComment.id,
+                post_id: createdComment.post_id,
+                user_id: createdComment.user_id,
+                parent_id: createdComment.parent_id,
+                content: createdComment.content,
+                created_at: createdComment.created_at,
+                is_anonymous: createdComment.is_anonymous,
+                user: createdComment.user || null,
+              },
+            },
+          }
+        }, false)
+
+        updateFeedCachesForComment(postId, createdComment)
+      }
+
+      void mutateComments()
+      void mutatePost()
     } catch {
       toast.error('Could not post comment')
     } finally {
@@ -162,7 +294,7 @@ function PostContent({ postId }: { postId: string }) {
   return (
     <div>
       <div className="border-b border-border">
-        <FeedCard post={post} />
+        <FeedCard post={post} showLatestCommentPreview={false} />
         {isOwner && (
           <div className="px-4 pb-3 flex justify-end">
             <button

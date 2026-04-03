@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
   const supabase = createAdminClient()
 
   const { data: profile } = await supabase
-    .from('users').select('id, is_banned').eq('auth_id', _authId).single()
+    .from('users').select('id, is_banned, full_name, username, display_name, avatar_url, is_verified, city').eq('auth_id', _authId).single()
   if (!profile) return NextResponse.json({ error: 'Profile not found' }, { status: 404 })
   if (profile.is_banned) return NextResponse.json({ error: 'Account suspended' }, { status: 403 })
 
@@ -231,7 +231,24 @@ export async function POST(req: NextRequest) {
 
   invalidateProfile(profile.id).catch(() => {})
 
-  return NextResponse.json({ data: post }, { status: 201 })
+  const responsePost = {
+    ...post,
+    user: {
+      id: profile.id,
+      full_name: profile.full_name ?? null,
+      username: profile.username ?? null,
+      display_name: profile.display_name ?? null,
+      avatar_url: profile.avatar_url ?? null,
+      is_verified: !!profile.is_verified,
+      city: profile.city ?? null,
+    },
+    comment_count: 0,
+    reaction_counts: { interesting: 0, funny: 0, deep: 0, curious: 0 },
+    user_reaction: null,
+    has_revealed: false,
+  }
+
+  return NextResponse.json({ data: responsePost }, { status: 201 })
 
   } catch (err: any) {
     console.error('[POST /api/posts]', err.message)

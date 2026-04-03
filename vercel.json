@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "regions": ["sin1"],
+  "functions": {
+    "app/api/**": { "maxDuration": 15 }
+  },
+  "env": {
+    "NEXT_TELEMETRY_DISABLED": "1"
+  }
+}

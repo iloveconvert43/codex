@@ -15,6 +15,9 @@ import useSWRInfinite from 'swr/infinite'
 import { mutate } from 'swr'
 import { supabase } from '@/lib/supabase'
 import { api, swrFetcher, getErrorMessage } from '@/lib/api'
+import { useAuth } from '@/hooks/useAuth'
+import { usePendingFeedPosts } from '@/hooks/usePendingPosts'
+import { mergePostsWithPending, removePendingPosts } from '@/lib/pendingPosts'
 import { useFeedStore } from '@/store/feedStore'
 import type { Post, FeedFilter, ReactionType } from '@/types'
 
@@ -27,30 +30,6 @@ interface FeedPage {
 
 const feedFetcher = (url: string) => swrFetcher<FeedPage>(url)
 const FEED_REFRESH_KEY = 'hushly-feed-refresh'
-const PENDING_POST_KEY = 'hushly-pending-post'
-const PENDING_POST_TTL_MS = 10 * 60 * 1000
-
-interface PendingFeedPost {
-  post: Post
-  storedAt: number
-}
-
-function readPendingFeedPost(): PendingFeedPost | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = sessionStorage.getItem(PENDING_POST_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as PendingFeedPost | null
-    if (!parsed?.post?.id || !parsed?.storedAt) return null
-    if (Date.now() - parsed.storedAt > PENDING_POST_TTL_MS) {
-      sessionStorage.removeItem(PENDING_POST_KEY)
-      return null
-    }
-    return parsed
-  } catch {
-    return null
-  }
-}
 
 function prependPostToPages(pages: FeedPage[] | undefined, post: Post): FeedPage[] {
   if (!pages || pages.length === 0) {
@@ -83,14 +62,14 @@ function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number) {
 
 export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug?: string, selectedCity?: string, radiusKm: number = 10) {
   // Track seen post IDs — reset when filter/city/room changes
+  const { profile } = useAuth()
   const seenPostIds = useRef<Set<string>>(new Set())
   const prevFilterKey = useRef<string>('')
   const freshNonceRef = useRef<string | null>(
     typeof window !== 'undefined' ? sessionStorage.getItem(FEED_REFRESH_KEY) : null
   )
-  const pendingPostRef = useRef<PendingFeedPost | null>(readPendingFeedPost())
-  const injectedPendingRef = useRef(false)
   const filterKey = `${filter}:${selectedCity || ''}:${roomSlug || ''}`
+  const pendingPosts = usePendingFeedPosts(profile?.id, filter, lat, lng, roomSlug, selectedCity, radiusKm)
 
   if (prevFilterKey.current !== filterKey) {
     prevFilterKey.current = filterKey
@@ -149,28 +128,17 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
       }
   )
 
-  useEffect(() => {
-    const pending = pendingPostRef.current
-    if (injectedPendingRef.current || !pending) return
-    if (filter !== 'global') return
-
-    injectedPendingRef.current = true
-    seenPostIds.current.add(pending.post.id)
-    upsertPost(pending.post)
-    mutateFeed((pages) => prependPostToPages(pages, pending.post), false)
-  }, [filter, mutateFeed, upsertPost])
-
   // Sync SWR data into feedStore
   useEffect(() => {
-    const allPosts = data?.flatMap(p => p.data ?? []) ?? []
+    const serverPosts = data?.flatMap(p => p.data ?? []) ?? []
+    const allPosts = mergePostsWithPending(serverPosts, pendingPosts)
     if (allPosts.length > 0) upsertPosts(allPosts)
-  }, [data, upsertPosts])
+  }, [data, pendingPosts, upsertPosts])
 
   useEffect(() => {
     if (!data) return
 
-    const pending = pendingPostRef.current
-    if (!pending) {
+    if (!pendingPosts.length) {
       if (freshNonceRef.current) {
         try { sessionStorage.removeItem(FEED_REFRESH_KEY) } catch {}
         freshNonceRef.current = null
@@ -178,18 +146,18 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
       return
     }
 
-    const existsInFreshData = data.some((page) =>
-      (page.data ?? []).some((post) => post.id === pending.post.id)
-    )
-    if (!existsInFreshData) return
+    const serverIds = data.flatMap((page) => (page.data ?? []).map((post) => post.id))
+    const matchedPendingIds = pendingPosts
+      .map((post) => post.id)
+      .filter((id) => serverIds.includes(id))
+    if (!matchedPendingIds.length) return
 
     if (freshNonceRef.current) {
       try { sessionStorage.removeItem(FEED_REFRESH_KEY) } catch {}
       freshNonceRef.current = null
     }
-    pendingPostRef.current = null
-    try { sessionStorage.removeItem(PENDING_POST_KEY) } catch {}
-  }, [data])
+    removePendingPosts(matchedPendingIds)
+  }, [data, pendingPosts])
 
   // Real-time new posts subscription — works for global, city, nearby, friends
   useEffect(() => {
@@ -305,13 +273,17 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
     }
   }, [filter, lat, lng, mutateFeed, radiusKm, roomSlug, selectedCity, upsertPost])
 
-  const posts: Post[] = data ? data.flatMap((p) => p.data ?? []) : []
+  const serverPosts: Post[] = data ? data.flatMap((p) => p.data ?? []) : []
+  const posts: Post[] = mergePostsWithPending(serverPosts, pendingPosts)
   // Track all seen post IDs for anti-repetition
   useEffect(() => {
     posts.forEach(p => seenPostIds.current.add(p.id))
   }, [posts.length]) // eslint-disable-line
-  const isLoading = !data && !error
-  const hasMore = data?.[data.length - 1]?.hasMore ?? false
+  const isLoading = !data && !error && pendingPosts.length === 0
+  const hasUnconfirmedPendingPosts = pendingPosts.some((pendingPost) =>
+    !serverPosts.some((serverPost) => serverPost.id === pendingPost.id)
+  )
+  const hasMore = hasUnconfirmedPendingPosts || (data?.[data.length - 1]?.hasMore ?? false)
 
   // ── Auto-reload nearby when user moves to a new area ───────────
   // Polls localStorage every 5s for area changes written by useLocation.

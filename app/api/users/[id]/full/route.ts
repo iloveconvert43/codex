@@ -63,7 +63,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
 
     const [userRes, followerRes, followingRes, pointsRes, postsRes, followRes] = await Promise.all([
       // Users query is NOT wrapped in safeQuery — we need to distinguish "not found" vs "error"
-      supabase.from('users').select('id,username,full_name,display_name,bio,avatar_url,city,is_verified,is_banned,created_at,privacy_settings,is_private,is_anonymous').eq('id', params.id).single(),
+      supabase.from('users').select('id,username,full_name,display_name,bio,avatar_url,cover_url,city,current_city,hometown,pronouns,relationship_status,languages,pinned_info,is_verified,is_banned,created_at,privacy_settings,is_private,is_anonymous').eq('id', params.id).single(),
       safeQuery(() => supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', params.id)),
       safeQuery(() => supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', params.id)),
       safeQuery(() => supabase.from('user_points').select('total_points,weekly_points,level').eq('user_id', params.id).single()),

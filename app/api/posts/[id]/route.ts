@@ -45,9 +45,36 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       if (r.type in reaction_counts) reaction_counts[r.type as keyof typeof reaction_counts]++
     })
 
-    const { count: comment_count } = await admin
-      .from('comments').select('id', { count: 'exact', head: true })
-      .eq('post_id', params.id).eq('is_deleted', false)
+    const [
+      { count: comment_count },
+      { data: latestCommentRow },
+    ] = await Promise.all([
+      admin
+        .from('comments').select('id', { count: 'exact', head: true })
+        .eq('post_id', params.id).eq('is_deleted', false),
+      admin
+        .from('comments')
+        .select('id, post_id, user_id, parent_id, content, created_at, is_anonymous')
+        .eq('post_id', params.id)
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
+
+    let latest_comment = latestCommentRow || null
+    if (latest_comment && !latest_comment.is_anonymous && latest_comment.user_id) {
+      const { data: latestCommentUser } = await admin
+        .from('users')
+        .select('id, username, display_name, avatar_url, is_verified')
+        .eq('id', latest_comment.user_id)
+        .maybeSingle()
+
+      latest_comment = {
+        ...latest_comment,
+        user: latestCommentUser || null,
+      }
+    }
 
     let user_reaction = null
     let has_revealed = false
@@ -83,6 +110,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         gif_url: post.is_mystery && !has_revealed ? null : post.gif_url,
         reaction_counts,
         comment_count: comment_count ?? 0,
+        latest_comment,
         user_reaction,
         has_revealed }
     })

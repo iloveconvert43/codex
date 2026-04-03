@@ -30,20 +30,41 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     const cursor  = searchParams.get('before')   // ISO timestamp — load messages before this
     const limit   = Math.min(parseInt(searchParams.get('limit') || '50'), 100)
 
+    const selectClause = '*, sender:users!sender_id(id,username,display_name,avatar_url,is_verified)'
+
     let query = supabase
       .from('direct_messages')
-      .select('*, sender:users!sender_id(id,username,display_name,avatar_url)')
+      .select(selectClause)
       .or(
-        `and(sender_id.eq.${me.id},receiver_id.eq.${params.userId}),` +
-        `and(sender_id.eq.${params.userId},receiver_id.eq.${me.id})`
+        `and(sender_id.eq.${me.id},receiver_id.eq.${params.userId},deleted_for_sender.eq.false),` +
+        `and(sender_id.eq.${params.userId},receiver_id.eq.${me.id},deleted_for_receiver.eq.false)`
       )
-      .eq('is_deleted', false)
       .order('created_at', { ascending: false })  // newest first for cursor
       .limit(limit + 1)  // fetch one extra to know if there are more
 
     if (cursor) query = query.lt('created_at', cursor)
 
-    const { data, error } = await query
+    let { data, error } = await query
+
+    if (error && /column .* does not exist|schema cache/i.test(error.message || '')) {
+      let legacyQuery = supabase
+        .from('direct_messages')
+        .select(selectClause)
+        .or(
+          `and(sender_id.eq.${me.id},receiver_id.eq.${params.userId}),` +
+          `and(sender_id.eq.${params.userId},receiver_id.eq.${me.id})`
+        )
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false })
+        .limit(limit + 1)
+
+      if (cursor) legacyQuery = legacyQuery.lt('created_at', cursor)
+
+      const legacy = await legacyQuery
+      data = legacy.data
+      error = legacy.error
+    }
+
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
     const msgs = data || []

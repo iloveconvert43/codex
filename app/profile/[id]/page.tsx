@@ -6,10 +6,9 @@ import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import Link from 'next/link'
-import Image from 'next/image'
 import {
   ArrowLeft, MessageCircle,
-  MapPin, Shield, Grid3X3, BookOpen, MoreHorizontal,
+  MapPin, Shield, Grid3X3, MoreHorizontal,
   Briefcase, GraduationCap, Globe
 } from 'lucide-react'
 import { api, getErrorMessage, swrFetcher } from '@/lib/api'
@@ -23,40 +22,7 @@ import { usePendingUserPosts } from '@/hooks/usePendingPosts'
 import { mergePostsWithPending } from '@/lib/pendingPosts'
 import { useRealtimePostCounts } from '@/hooks/useRealtimePostCounts'
 import ProfileAboutSections from '@/components/profile/ProfileAboutSections'
-
-// ── Avatar component ──────────────────────────────────────────
-function ProfileAvatar({ user, size = 86 }: { user: any; size?: number }) {
-  const s = `${size}px`
-  const gradients = [
-    'from-violet-500 to-purple-600',
-    'from-pink-500 to-rose-500',
-    'from-blue-500 to-cyan-500',
-    'from-emerald-500 to-teal-500',
-    'from-orange-500 to-amber-500',
-  ]
-  const grad = gradients[(user?.id?.charCodeAt(0) || 0) % gradients.length]
-  const initials = (user?.display_name || user?.username || '?')[0]?.toUpperCase()
-
-  if (user?.avatar_url) {
-    return (
-      <Image
-        src={user.avatar_url}
-        alt={user.display_name || 'User'}
-        width={size} height={size}
-        className="rounded-full object-cover"
-        style={{ width: s, height: s }}
-      />
-    )
-  }
-  return (
-    <div
-      className={`rounded-full bg-gradient-to-br ${grad} flex items-center justify-center text-white font-bold`}
-      style={{ width: s, height: s, fontSize: size * 0.38 }}
-    >
-      {initials}
-    </div>
-  )
-}
+import ProfileHero from '@/components/profile/ProfileHero'
 
 // ── Story highlight circle ─────────────────────────────────────
 function StoryRing({ highlight, onClick }: { highlight: any; onClick: () => void }) {
@@ -193,6 +159,39 @@ export default function ProfileDetailPage() {
       .flatMap((key) => Array.isArray(ext?.interests?.[key]) ? ext.interests[key] : [])
       .filter(Boolean)
   )).slice(0, 6)
+  const headline = pinnedInfo && pinnedInfo !== user?.bio ? pinnedInfo : null
+  const quickFacts = [
+    ext?.work?.length > 0 ? (() => {
+      const current = ext.work.find((item: any) => item.is_current) || ext.work[0]
+      if (!current) return null
+      return {
+        icon: <Briefcase size={14} />,
+        label: `${current.position || current.role || 'Working'}${current.company ? ` at ${current.company}` : ''}`,
+      }
+    })() : null,
+    ext?.education?.length > 0 ? (() => {
+      const current = ext.education.find((item: any) => item.is_current) || ext.education[0]
+      if (!current) return null
+      return {
+        icon: <GraduationCap size={14} />,
+        label: `${current.degree ? `${current.degree} · ` : ''}${current.school}`,
+      }
+    })() : null,
+    (currentCity || ext?.hometown) ? {
+      icon: <MapPin size={14} />,
+      label: currentCity && ext?.hometown && currentCity !== ext.hometown
+        ? `${currentCity} · From ${ext.hometown}`
+        : (currentCity || `From ${ext?.hometown}`),
+    } : null,
+    ext?.social_instagram ? {
+      icon: <Globe size={14} />,
+      label: `@${ext.social_instagram}`,
+      accent: true,
+    } : ext?.relationship_status ? {
+      icon: <span className="text-sm">❤️</span>,
+      label: String(ext.relationship_status).replace(/_/g, ' '),
+    } : null,
+  ].filter(Boolean) as Array<{ icon: React.ReactNode; label: string; accent?: boolean }>
 
   async function handleFollow() {
     if (!isLoggedIn) { router.push('/login'); return }
@@ -249,189 +248,96 @@ export default function ProfileDetailPage() {
 
   const ProfileContent = () => (
     <div className="pb-nav">
-      {/* ── Cover photo ── */}
-      <div className="relative h-44 sm:h-52 bg-gradient-to-br from-primary/40 via-accent-red/20 to-accent-yellow/10 overflow-hidden">
-        {coverUrl && (
-          <img src={coverUrl} className="w-full h-full object-cover" alt="" loading="lazy" />
-        )}
-        {/* Dark gradient at bottom for avatar overlap */}
-        <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-bg/85 to-transparent" />
-      </div>
-
-      {/* ── Avatar + Actions row ── */}
-      <div className="px-4 -mt-12 flex items-end justify-between mb-3">
-        <div className="relative">
-          <div className="ring-4 ring-bg rounded-full">
-            <ProfileAvatar user={user} size={86} />
-          </div>
-          {user.is_verified && (
-            <div className="absolute -bottom-0.5 -right-0.5 w-6 h-6 bg-primary rounded-full flex items-center justify-center border-2 border-bg">
-              <Shield size={11} className="text-white" />
-            </div>
-          )}
-        </div>
-
-        {/* Action buttons */}
-        <div className="flex items-center gap-2 pb-1">
-          {isOwnProfile ? (
-            <Link href="/profile/edit"
-              className="px-5 py-2.5 rounded-xl border border-border text-sm font-semibold hover:bg-bg-card2 transition-colors">
+      <ProfileHero
+        user={user}
+        coverUrl={coverUrl}
+        displayName={displayName}
+        username={user.username}
+        bio={user.bio}
+        headline={headline}
+        quickFacts={quickFacts}
+        interestTags={interestPreviewTags}
+        stats={[
+          { label: 'Posts', value: posts.length },
+          { label: 'Followers', value: followerCount, onClick: () => router.push(`/profile/${user.id}/followers`) },
+          { label: 'Following', value: followingCount, onClick: () => router.push(`/profile/${user.id}/following`) },
+          { label: 'Points', value: points?.total_points || 0, accent: true },
+        ]}
+        actions={isOwnProfile ? (
+          <div className="space-y-2">
+            <Link
+              href="/profile/edit"
+              className="btn-primary w-full inline-flex items-center justify-center rounded-2xl py-3 text-sm font-semibold"
+            >
               Edit Profile
             </Link>
-          ) : (
-            <>
-              <button onClick={handleFollow}
-                className={cn(
-                  "px-5 py-2 rounded-xl text-sm font-semibold transition-all",
-                  actualFollowing
-                    ? "border border-border text-text hover:border-accent-red/50 hover:text-accent-red"
-                    : "bg-primary text-white hover:bg-primary-hover"
-                )}>
-                {actualFollowing ? 'Following' : 'Follow'}
-              </button>
-              {isLoggedIn && (
-                <Link href={`/messages?user=${user.id}`}
-                  className="w-9 h-9 rounded-xl border border-border flex items-center justify-center hover:bg-bg-card2 transition-colors">
-                  <MessageCircle size={17} className="text-text-muted" />
-                </Link>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* ── Name + bio ── */}
-      <div className="px-4 mb-4">
-        <div className="flex items-center gap-2 mb-0.5">
-          <h1 className="text-lg font-bold">{displayName}</h1>
-        </div>
-        {user.username && (
-          <p className="text-sm text-text-muted mb-1">@{user.username}</p>
-        )}
-        {user.bio && (
-          <p className="text-sm text-text leading-relaxed mb-2">{user.bio}</p>
-        )}
-        {pinnedInfo && (
-          <p className="text-sm text-text-secondary leading-relaxed mb-2">{pinnedInfo}</p>
-        )}
-
-        {/* Instagram-style details strip below bio */}
-        <div className="flex flex-col gap-1.5 mb-2">
-          {/* Current job — like Instagram shows company */}
-          {ext?.work?.length > 0 && (() => {
-            const current = ext.work.find((w: any) => w.is_current) || ext.work[0]
-            return current ? (
-              <span className="flex items-center gap-1.5 text-xs text-text-secondary">
-                <Briefcase size={11} className="text-text-muted flex-shrink-0" />
-                <span>{current.position || current.role}{current.company ? ` at ${current.company}` : ''}</span>
-              </span>
-            ) : null
-          })()}
-          {/* Education — like Instagram shows school */}
-          {ext?.education?.length > 0 && (() => {
-            const current = ext.education.find((e: any) => e.is_current) || ext.education[0]
-            return current ? (
-              <span className="flex items-center gap-1.5 text-xs text-text-secondary">
-                <GraduationCap size={11} className="text-text-muted flex-shrink-0" />
-                <span>{current.degree ? `${current.degree} — ` : ''}{current.school}</span>
-              </span>
-            ) : null
-          })()}
-          {/* City */}
-          {(currentCity || ext?.hometown) && (
-            <span className="flex items-center gap-1.5 text-xs text-text-secondary">
-              <MapPin size={11} className="text-text-muted flex-shrink-0" />
-              <span>
-                {currentCity}{currentCity && ext?.hometown && currentCity !== ext.hometown ? ` · From ${ext.hometown}` : ''}
-                {!currentCity && ext?.hometown ? `From ${ext.hometown}` : ''}
-              </span>
-            </span>
-          )}
-          {/* Relationship status */}
-          {ext?.relationship_status && (
-            <span className="flex items-center gap-1.5 text-xs text-text-secondary">
-              <span className="text-text-muted flex-shrink-0">❤️</span>
-              <span className="capitalize">{ext.relationship_status.replace(/_/g, ' ')}</span>
-            </span>
-          )}
-          {/* Website / social */}
-          {ext?.social_instagram && (
-            <span className="flex items-center gap-1.5 text-xs text-primary">
-              <Globe size={11} className="flex-shrink-0" />
-              <span>@{ext.social_instagram}</span>
-            </span>
-          )}
-        </div>
-
-        {/* Interest tags — Instagram style */}
-        {interestPreviewTags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-1">
-            {interestPreviewTags.map((t: string, i: number) => (
-              <span key={i} className="text-[10px] bg-primary/8 text-primary px-2 py-0.5 rounded-full font-medium">
-                {t}
-              </span>
-            ))}
+            <p className="text-[11px] text-text-muted text-center sm:text-right">
+              Manage photos and profile details.
+            </p>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <button onClick={handleFollow}
+              className={cn(
+                "flex-1 rounded-2xl px-4 py-3 text-sm font-semibold follow-btn-transition",
+                actualFollowing
+                  ? "border border-border text-text hover:border-accent-red/50 hover:text-accent-red"
+                  : "bg-primary text-white hover:bg-primary-hover"
+              )}>
+              {actualFollowing ? 'Following' : 'Follow'}
+            </button>
+            {isLoggedIn && (
+              <Link href={`/messages?user=${user.id}`}
+                className="btn-ghost flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm">
+                <MessageCircle size={16} />
+                <span className="hidden sm:inline">Message</span>
+              </Link>
+            )}
           </div>
         )}
-      </div>
-
-      {/* ── Stats row ── */}
-      <div className="flex border-y border-border mx-0 mb-0">
-        <div className="flex-1 py-3 text-center">
-          <p className="font-bold text-base">{posts.length}</p>
-          <p className="text-[11px] text-text-muted">Posts</p>
-        </div>
-        <button onClick={() => router.push(`/profile/${user.id}/followers`)}
-          className="flex-1 py-3 text-center hover:bg-bg-card/50 transition-colors">
-          <p className="font-bold text-base">{followerCount}</p>
-          <p className="text-[11px] text-text-muted">Followers</p>
-        </button>
-        <button onClick={() => router.push(`/profile/${user.id}/following`)}
-          className="flex-1 py-3 text-center hover:bg-bg-card/50 transition-colors">
-          <p className="font-bold text-base">{followingCount}</p>
-          <p className="text-[11px] text-text-muted">Following</p>
-        </button>
-        {points && (
-          <div className="flex-1 py-3 text-center">
-            <p className="font-bold text-base gradient-text">{points.total_points || 0}</p>
-            <p className="text-[11px] text-text-muted">Points</p>
-          </div>
-        )}
-      </div>
+      />
 
       {/* ── Story highlights ── */}
       {highlights.length > 0 && (
-        <div className="px-4 py-3 border-b border-border">
-          <div className="flex gap-4 overflow-x-auto hide-scrollbar pb-1">
+        <div className="px-4 pt-4">
+          <div className="glass-card rounded-[24px] p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold">Highlights</h2>
+              <span className="text-[11px] text-text-muted">Pinned story moments</span>
+            </div>
+            <div className="flex gap-4 overflow-x-auto hide-scrollbar pb-1">
             {highlights.map((h: any) => (
               <StoryRing key={h.id} highlight={h} onClick={() => {}} />
             ))}
+            </div>
           </div>
         </div>
       )}
 
       {/* ── Tabs ── */}
-      <div className="flex border-b border-border">
+      <div className="px-4 pt-4">
+        <div className="glass-card rounded-[22px] p-1.5 flex gap-1">
         <button
           onClick={() => setActiveTab('posts')}
           className={cn(
-            "flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-semibold transition-colors border-b-2",
+            "flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-semibold rounded-2xl transition-colors",
             activeTab === 'posts'
-              ? "border-text text-text"
-              : "border-transparent text-text-muted hover:text-text"
+              ? "bg-primary/10 text-primary"
+              : "text-text-muted hover:bg-bg-card2 hover:text-text"
           )}>
           <Grid3X3 size={15} /> Posts
         </button>
         <button
           onClick={() => setActiveTab('about')}
           className={cn(
-            "flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-semibold transition-colors border-b-2",
+            "flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-semibold rounded-2xl transition-colors",
             activeTab === 'about'
-              ? "border-text text-text"
-              : "border-transparent text-text-muted hover:text-text"
+              ? "bg-primary/10 text-primary"
+              : "text-text-muted hover:bg-bg-card2 hover:text-text"
           )}>
-          <BookOpen size={15} /> About
+          <span className="text-sm">📖</span> About
         </button>
+        </div>
       </div>
 
       {/* ── Posts grid tab ── */}

@@ -4,8 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Settings, Grid3X3, BookOpen, LogOut, Edit3,
-         Briefcase, GraduationCap, MapPin, Globe } from 'lucide-react'
+import { Grid3X3, BookOpen, MapPin } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import BottomNav from '@/components/layout/BottomNav'
 import DesktopSidebar from '@/components/layout/DesktopSidebar'
@@ -18,6 +17,7 @@ import TopBar from '@/components/layout/TopBar'
 import { usePendingUserPosts } from '@/hooks/usePendingPosts'
 import { mergePostsWithPending } from '@/lib/pendingPosts'
 import { useRealtimePostCounts } from '@/hooks/useRealtimePostCounts'
+import ProfileAboutSections from '@/components/profile/ProfileAboutSections'
 
 const BADGE_LABELS: Record<string, string> = {
   streak_7: '🔥 7-Day Streak',
@@ -141,35 +141,29 @@ export default function ProfilePage() {
   const points     = fd?.points
   const badges: any[] = []
   const displayName = profile.display_name || profile.full_name || profile.username || 'You'
+  const currentCity = ext?.current_city || profile.current_city || profile.city
+  const coverUrl = ext?.cover_url || profile.cover_url || null
+  const pinnedInfo = ext?.pinned_info || profile.pinned_info
 
   const ProfileContent = () => (
     <div className="pb-nav">
       {/* Cover */}
-      <div className="relative h-36 bg-gradient-to-br from-primary/40 via-accent-red/20 to-accent-yellow/10 overflow-hidden">
-        {profile.cover_url && (
-          <img src={profile.cover_url} className="w-full h-full object-cover" alt="" />
+      <div className="relative h-44 sm:h-52 bg-gradient-to-br from-primary/40 via-accent-red/20 to-accent-yellow/10 overflow-hidden">
+        {coverUrl && (
+          <img src={coverUrl} className="w-full h-full object-cover" alt="" />
         )}
+        <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-bg/85 to-transparent" />
       </div>
 
       {/* Avatar + actions */}
-      <div className="px-4 -mt-10 flex items-end justify-between mb-3">
+      <div className="px-4 -mt-12 flex items-end justify-between mb-3">
         <div className="ring-4 ring-bg rounded-full">
           <OwnAvatar profile={profile} size={86} />
         </div>
-        <div className="flex items-center gap-2 pb-1">
-          <Link href="/profile/edit"
-            className="w-9 h-9 rounded-xl border border-border flex items-center justify-center hover:bg-bg-card2 transition-colors">
-            <Edit3 size={16} className="text-text-muted" />
-          </Link>
-          <Link href="/settings"
-            className="w-9 h-9 rounded-xl border border-border flex items-center justify-center hover:bg-bg-card2 transition-colors">
-            <Settings size={16} className="text-text-muted" />
-          </Link>
-          <button onClick={signOut}
-            className="w-9 h-9 rounded-xl border border-border flex items-center justify-center hover:bg-red-500/10 hover:border-red-500/30 transition-colors">
-            <LogOut size={16} className="text-text-muted" />
-          </button>
-        </div>
+        <Link href="/profile/edit"
+          className="inline-flex items-center justify-center px-5 py-2.5 rounded-xl border border-border text-sm font-semibold hover:bg-bg-card2 transition-colors">
+          Edit Profile
+        </Link>
       </div>
 
       {/* Name */}
@@ -177,9 +171,12 @@ export default function ProfilePage() {
         <h1 className="text-lg font-bold">{displayName}</h1>
         {profile.username && <p className="text-sm text-text-muted">@{profile.username}</p>}
         {profile.bio && <p className="text-sm text-text leading-relaxed mt-1">{profile.bio}</p>}
-        {profile.city && (
+        {pinnedInfo && (
+          <p className="text-sm text-text-secondary leading-relaxed mt-1">{pinnedInfo}</p>
+        )}
+        {currentCity && (
           <span className="flex items-center gap-1 text-xs text-text-muted mt-1">
-            <MapPin size={11} /> {profile.city}
+            <MapPin size={11} /> {currentCity}
           </span>
         )}
       </div>
@@ -269,75 +266,27 @@ export default function ProfilePage() {
 
       {/* About tab */}
       {activeTab === 'about' && (
-        <div className="px-4 py-4 space-y-4">
-          <div className="glass-card p-4 rounded-2xl space-y-3">
-            <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider">Basic Info</h3>
-            {profile.city && (
-              <div className="flex items-center gap-3">
-                <MapPin size={16} className="text-primary" />
-                <span className="text-sm">{profile.city}</span>
-              </div>
-            )}
-            {ext?.hometown && (
-              <div className="flex items-center gap-3">
-                <span className="text-base">🏡</span>
-                <span className="text-sm">From {ext.hometown}</span>
-              </div>
-            )}
-            {points && (
-              <div className="flex items-center gap-3">
-                <span className="text-base">⭐</span>
-                <span className="text-sm">Level: <span className="text-primary font-semibold capitalize">{(points.level || 'newcomer').replace(/_/g,' ')}</span></span>
-              </div>
-            )}
-          </div>
-          {ext?.work?.length > 0 && (
-            <div className="glass-card p-4 rounded-2xl space-y-3">
-              <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider">Work</h3>
-              {ext.work.map((w: any, i: number) => (
-                <div key={i} className="flex items-start gap-3">
-                  <Briefcase size={15} className="text-primary mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-semibold">{w.position || w.role}</p>
-                    <p className="text-xs text-text-muted">{w.company}</p>
-                  </div>
+        <>
+          <ProfileAboutSections user={profile} ext={ext} points={points} isOwnProfile />
+          <div className="px-4 pb-4 space-y-4">
+            {badges.length > 0 && (
+              <div className="glass-card p-4 rounded-2xl">
+                <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Badges</h3>
+                <div className="flex flex-wrap gap-2">
+                  {badges.map((b: any) => (
+                    <span key={b.badge_type} className="text-xs bg-primary/10 text-primary px-3 py-1 rounded-full">
+                      {BADGE_LABELS[b.badge_type] || b.badge_type}
+                    </span>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-          {ext?.education?.length > 0 && (
-            <div className="glass-card p-4 rounded-2xl space-y-3">
-              <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider">Education</h3>
-              {ext.education.map((e: any, i: number) => (
-                <div key={i} className="flex items-start gap-3">
-                  <GraduationCap size={15} className="text-primary mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-semibold">{e.school}</p>
-                    <p className="text-xs text-text-muted">{e.degree}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {badges.length > 0 && (
-            <div className="glass-card p-4 rounded-2xl">
-              <h3 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Badges</h3>
-              <div className="flex flex-wrap gap-2">
-                {badges.map((b: any) => (
-                  <span key={b.badge_type} className="text-xs bg-primary/10 text-primary px-3 py-1 rounded-full">
-                    {BADGE_LABELS[b.badge_type] || b.badge_type}
-                  </span>
-                ))}
               </div>
-            </div>
-          )}
-          <div className="pt-2">
+            )}
             <button onClick={signOut}
               className="w-full py-3 rounded-2xl border border-red-500/30 text-red-400 text-sm font-semibold hover:bg-red-500/10 transition-colors">
               Sign Out
             </button>
           </div>
-        </div>
+        </>
       )}
     </div>
   )

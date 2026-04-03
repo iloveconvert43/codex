@@ -841,21 +841,11 @@ function GifPicker({ onSelect, onClose }: { onSelect: (url: string) => void; onC
   async function searchGifs(q: string) {
     setLoading(true)
     try {
-      // GIPHY API key — get free key from https://developers.giphy.com/
-      const GIPHY_KEY = process.env.NEXT_PUBLIC_GIPHY_API_KEY || 'dc6zaTOxFJmzC'
-      const endpoint = q === 'trending'
-        ? `https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_KEY}&limit=16&rating=g`
-        : `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_KEY}&q=${encodeURIComponent(q)}&limit=16&rating=g`
-
-      const res = await fetch(endpoint)
-      if (!res.ok) throw new Error('Giphy error')
+      const normalized = q === 'trending' ? '' : q
+      const res = await fetch(`/api/gifs?q=${encodeURIComponent(normalized)}&limit=16`, { cache: 'no-store' })
+      if (!res.ok) throw new Error('GIF search failed')
       const data = await res.json()
-      const urls = (data.data || []).map((g: any) =>
-        g.images?.fixed_height_small?.url ||
-        g.images?.fixed_height?.url ||
-        g.images?.downsized?.url
-      ).filter(Boolean)
-      setResults(urls)
+      setResults(Array.isArray(data?.data) ? data.data : [])
     } catch {
       setResults([])
     } finally {
@@ -914,7 +904,7 @@ function GifPicker({ onSelect, onClose }: { onSelect: (url: string) => void; onC
             className="btn-primary text-xs px-3 py-1.5">Use</button>
         )}
       </div>
-      <p className="text-[10px] text-text-muted text-center">Powered by GIPHY</p>
+      <p className="text-[10px] text-text-muted text-center">GIF suggestions</p>
     </div>
   )
 }

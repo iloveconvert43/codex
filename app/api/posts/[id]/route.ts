@@ -45,22 +45,41 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       if (r.type in reaction_counts) reaction_counts[r.type as keyof typeof reaction_counts]++
     })
 
-    const [
-      { count: comment_count },
-      { data: latestCommentRow },
-    ] = await Promise.all([
+    const [{ count: comment_count }] = await Promise.all([
       admin
         .from('comments').select('id', { count: 'exact', head: true })
         .eq('post_id', params.id).eq('is_deleted', false),
-      admin
-        .from('comments')
-        .select('id, post_id, user_id, parent_id, content, created_at, is_anonymous')
-        .eq('post_id', params.id)
-        .eq('is_deleted', false)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
     ])
+
+    let latestCommentRow: any = null
+    const latestCommentSelect =
+      'id, post_id, user_id, parent_id, content, created_at, is_anonymous, image_url, video_url, video_thumbnail_url, gif_url'
+
+    const latestCommentQuery = () => admin
+      .from('comments')
+      .select(latestCommentSelect)
+      .eq('post_id', params.id)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const latestCommentFallbackQuery = () => admin
+      .from('comments')
+      .select('id, post_id, user_id, parent_id, content, created_at, is_anonymous')
+      .eq('post_id', params.id)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const latestCommentResponse = await latestCommentQuery()
+    if (latestCommentResponse.error && /column .* does not exist/i.test(latestCommentResponse.error.message || '')) {
+      const fallbackResponse = await latestCommentFallbackQuery()
+      latestCommentRow = fallbackResponse.data || null
+    } else {
+      latestCommentRow = latestCommentResponse.data || null
+    }
 
     let latest_comment = latestCommentRow || null
     if (latest_comment && !latest_comment.is_anonymous && latest_comment.user_id) {

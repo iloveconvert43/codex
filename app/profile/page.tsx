@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Grid3X3, BookOpen, MapPin } from 'lucide-react'
+import { Briefcase, Globe, GraduationCap, Grid3X3, MapPin, PenSquare } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import BottomNav from '@/components/layout/BottomNav'
 import DesktopSidebar from '@/components/layout/DesktopSidebar'
@@ -12,12 +12,12 @@ import useSWR from 'swr'
 import { swrFetcher } from '@/lib/api'
 import { cn, getRelativeTime } from '@/lib/utils'
 import Link from 'next/link'
-import Image from 'next/image'
 import TopBar from '@/components/layout/TopBar'
 import { usePendingUserPosts } from '@/hooks/usePendingPosts'
 import { mergePostsWithPending } from '@/lib/pendingPosts'
 import { useRealtimePostCounts } from '@/hooks/useRealtimePostCounts'
 import ProfileAboutSections from '@/components/profile/ProfileAboutSections'
+import ProfileHero from '@/components/profile/ProfileHero'
 
 const BADGE_LABELS: Record<string, string> = {
   streak_7: '🔥 7-Day Streak',
@@ -28,22 +28,6 @@ const BADGE_LABELS: Record<string, string> = {
   challenge_champion: '🏆 Challenge Champion',
   early_adopter: '🌱 Early Adopter',
   verified_creator: '✅ Verified Creator',
-}
-
-function OwnAvatar({ profile, size = 86 }: { profile: any; size?: number }) {
-  const s = `${size}px`
-  const gradients = ['from-violet-500 to-purple-600','from-pink-500 to-rose-500','from-blue-500 to-cyan-500','from-emerald-500 to-teal-500','from-orange-500 to-amber-500']
-  const grad = gradients[(profile?.id?.charCodeAt(0) || 0) % gradients.length]
-  const initials = (profile?.display_name || profile?.username || '?')[0]?.toUpperCase()
-  if (profile?.avatar_url) {
-    return <Image src={profile.avatar_url} alt="" width={size} height={size} className="rounded-full object-cover" style={{ width: s, height: s }} />
-  }
-  return (
-    <div className={`rounded-full bg-gradient-to-br ${grad} flex items-center justify-center text-white font-bold`}
-      style={{ width: s, height: s, fontSize: size * 0.38 }}>
-      {initials}
-    </div>
-  )
 }
 
 function PostCard({ post }: { post: any }) {
@@ -144,71 +128,87 @@ export default function ProfilePage() {
   const currentCity = ext?.current_city || profile.current_city || profile.city
   const coverUrl = ext?.cover_url || profile.cover_url || null
   const pinnedInfo = ext?.pinned_info || profile.pinned_info
+  const headline = pinnedInfo && pinnedInfo !== profile.bio ? pinnedInfo : null
+  const interestPreviewTags = Array.from(new Set(
+    ['music', 'tv_shows', 'movies', 'games', 'sports', 'places', 'hobbies', 'books']
+      .flatMap((key) => Array.isArray(ext?.interests?.[key]) ? ext.interests[key] : [])
+      .filter(Boolean)
+  )).slice(0, 6)
+  const quickFacts = [
+    ext?.work?.length > 0 ? (() => {
+      const current = ext.work.find((item: any) => item.is_current) || ext.work[0]
+      if (!current) return null
+      return {
+        icon: <Briefcase size={14} />,
+        label: `${current.position || current.role || 'Working'}${current.company ? ` at ${current.company}` : ''}`,
+      }
+    })() : null,
+    ext?.education?.length > 0 ? (() => {
+      const current = ext.education.find((item: any) => item.is_current) || ext.education[0]
+      if (!current) return null
+      return {
+        icon: <GraduationCap size={14} />,
+        label: `${current.degree ? `${current.degree} · ` : ''}${current.school}`,
+      }
+    })() : null,
+    (currentCity || ext?.hometown) ? {
+      icon: <MapPin size={14} />,
+      label: currentCity && ext?.hometown && currentCity !== ext.hometown
+        ? `${currentCity} · From ${ext.hometown}`
+        : (currentCity || `From ${ext?.hometown}`),
+    } : null,
+    ext?.social_instagram ? {
+      icon: <Globe size={14} />,
+      label: `@${ext.social_instagram}`,
+      accent: true,
+    } : ext?.relationship_status ? {
+      icon: <span className="text-sm">❤️</span>,
+      label: String(ext.relationship_status).replace(/_/g, ' '),
+    } : null,
+  ].filter(Boolean) as Array<{ icon: React.ReactNode; label: string; accent?: boolean }>
 
   const ProfileContent = () => (
     <div className="pb-nav">
-      {/* Cover */}
-      <div className="relative h-44 sm:h-52 bg-gradient-to-br from-primary/40 via-accent-red/20 to-accent-yellow/10 overflow-hidden">
-        {coverUrl && (
-          <img src={coverUrl} className="w-full h-full object-cover" alt="" />
-        )}
-        <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-bg/85 to-transparent" />
-      </div>
-
-      {/* Avatar + actions */}
-      <div className="px-4 -mt-12 flex items-end justify-between mb-3">
-        <div className="ring-4 ring-bg rounded-full">
-          <OwnAvatar profile={profile} size={86} />
-        </div>
-        <Link href="/profile/edit"
-          className="inline-flex items-center justify-center px-5 py-2.5 rounded-xl border border-border text-sm font-semibold hover:bg-bg-card2 transition-colors">
-          Edit Profile
-        </Link>
-      </div>
-
-      {/* Name */}
-      <div className="px-4 mb-4">
-        <h1 className="text-lg font-bold">{displayName}</h1>
-        {profile.username && <p className="text-sm text-text-muted">@{profile.username}</p>}
-        {profile.bio && <p className="text-sm text-text leading-relaxed mt-1">{profile.bio}</p>}
-        {pinnedInfo && (
-          <p className="text-sm text-text-secondary leading-relaxed mt-1">{pinnedInfo}</p>
-        )}
-        {currentCity && (
-          <span className="flex items-center gap-1 text-xs text-text-muted mt-1">
-            <MapPin size={11} /> {currentCity}
-          </span>
-        )}
-      </div>
-
-      {/* Stats */}
-      <div className="flex border-y border-border">
-        <div className="flex-1 py-3 text-center">
-          <p className="font-bold text-base">{posts.length}</p>
-          <p className="text-[11px] text-text-muted">Posts</p>
-        </div>
-        <button onClick={() => router.push(`/profile/${profile.id}/followers`)}
-          className="flex-1 py-3 text-center hover:bg-bg-card/50">
-          <p className="font-bold text-base">{followerCount}</p>
-          <p className="text-[11px] text-text-muted">Followers</p>
-        </button>
-        <button onClick={() => router.push(`/profile/${profile.id}/following`)}
-          className="flex-1 py-3 text-center hover:bg-bg-card/50">
-          <p className="font-bold text-base">{followingCount}</p>
-          <p className="text-[11px] text-text-muted">Following</p>
-        </button>
-        {points && (
-          <div className="flex-1 py-3 text-center">
-            <p className="font-bold text-base gradient-text">{points.total_points || 0}</p>
-            <p className="text-[11px] text-text-muted">Points</p>
+      <ProfileHero
+        user={profile}
+        coverUrl={coverUrl}
+        displayName={displayName}
+        username={profile.username}
+        bio={profile.bio}
+        headline={headline}
+        quickFacts={quickFacts}
+        interestTags={interestPreviewTags}
+        stats={[
+          { label: 'Posts', value: posts.length },
+          { label: 'Followers', value: followerCount, onClick: () => router.push(`/profile/${profile.id}/followers`) },
+          { label: 'Following', value: followingCount, onClick: () => router.push(`/profile/${profile.id}/following`) },
+          { label: 'Points', value: points?.total_points || 0, accent: true },
+        ]}
+        actions={(
+          <div className="space-y-2">
+            <Link
+              href="/profile/edit"
+              className="btn-primary w-full inline-flex items-center justify-center gap-2 rounded-2xl py-3 text-sm font-semibold"
+            >
+              <PenSquare size={15} />
+              Edit Profile
+            </Link>
+            <p className="text-[11px] text-text-muted text-center sm:text-right">
+              Update photos, intro and personal details.
+            </p>
           </div>
         )}
-      </div>
+      />
 
       {/* Story highlights */}
       {highlights.length > 0 && (
-        <div className="px-4 py-3 border-b border-border">
-          <div className="flex gap-4 overflow-x-auto hide-scrollbar pb-1">
+        <div className="px-4 pt-4">
+          <div className="glass-card rounded-[24px] p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold">Highlights</h2>
+              <span className="text-[11px] text-text-muted">Stories worth revisiting</span>
+            </div>
+            <div className="flex gap-4 overflow-x-auto hide-scrollbar pb-1">
             {highlights.map((h: any) => (
               <div key={h.id} className="flex flex-col items-center gap-1.5 flex-shrink-0">
                 <div className="w-16 h-16 rounded-full p-[2.5px] bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-600">
@@ -228,22 +228,25 @@ export default function ProfilePage() {
                 </span>
               </div>
             ))}
+            </div>
           </div>
         </div>
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-border">
-        <button onClick={() => setActiveTab('posts')}
-          className={cn("flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-semibold border-b-2 transition-colors",
-            activeTab === 'posts' ? "border-text text-text" : "border-transparent text-text-muted")}>
-          <Grid3X3 size={15} /> Posts
-        </button>
-        <button onClick={() => setActiveTab('about')}
-          className={cn("flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-semibold border-b-2 transition-colors",
-            activeTab === 'about' ? "border-text text-text" : "border-transparent text-text-muted")}>
-          <BookOpen size={15} /> About
-        </button>
+      <div className="px-4 pt-4">
+        <div className="glass-card rounded-[22px] p-1.5 flex gap-1">
+          <button onClick={() => setActiveTab('posts')}
+            className={cn("flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-semibold rounded-2xl transition-colors",
+              activeTab === 'posts' ? "bg-primary/10 text-primary" : "text-text-muted hover:bg-bg-card2")}>
+            <Grid3X3 size={15} /> Posts
+          </button>
+          <button onClick={() => setActiveTab('about')}
+            className={cn("flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-semibold rounded-2xl transition-colors",
+              activeTab === 'about' ? "bg-primary/10 text-primary" : "text-text-muted hover:bg-bg-card2")}>
+            <span className="text-sm">📖</span> About
+          </button>
+        </div>
       </div>
 
       {/* Posts grid */}

@@ -129,6 +129,9 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
       revalidateFirstPage: true,
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
+      refreshInterval: (filter === 'global' || filter === 'friends' || filter === 'city') ? 15000 : 0,
+      refreshWhenHidden: false,
+      refreshWhenOffline: false,
       keepPreviousData: true,
       errorRetryCount: 2,
       errorRetryInterval: 3000,
@@ -192,7 +195,13 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
         const newPost = payload.new as any
         const postAge = Date.now() - new Date(newPost.created_at).getTime()
         if (postAge > 30000) return
-        if (filter === 'city' && selectedCity && newPost.city !== selectedCity) return
+        const newPostScope = (newPost.scope || 'global') as FeedFilter | 'global'
+        if (filter === 'city') {
+          if (newPostScope !== 'city') return
+          if (selectedCity && newPost.city !== selectedCity) return
+          void mutateFeed()
+          return
+        }
         if (filter === 'room' && roomSlug) {
           if (newPost.room_id == null) return
           void mutateFeed()
@@ -202,31 +211,19 @@ export function useFeed(filter: FeedFilter, lat?: number, lng?: number, roomSlug
           void mutateFeed()
           return
         }
+        if (filter === 'global') {
+          if (newPostScope !== 'global') return
+          void mutateFeed()
+          return
+        }
         if (filter === 'nearby') {
+          if (newPostScope !== 'nearby') return
           if (lat == null || lng == null) return
           if (newPost.latitude == null || newPost.longitude == null) return
           if (distanceKm(lat, lng, Number(newPost.latitude), Number(newPost.longitude)) > radiusKm) return
+          void mutateFeed()
+          return
         }
-
-        upsertPost(newPost as Post)
-        mutateFeed((pages) => {
-          if (!pages || pages.length === 0) {
-            return [{ data: [newPost as Post], hasMore: false, nextCursor: newPost.created_at ?? null }]
-          }
-
-          const alreadyExists = pages.some(page =>
-            (page.data ?? []).some(post => post.id === newPost.id)
-          )
-          if (alreadyExists) return pages
-
-          return pages.map((page, index) => {
-            if (index !== 0) return page
-            return {
-              ...page,
-              data: [newPost as Post, ...(page.data ?? [])].slice(0, 20),
-            }
-          })
-        }, false)
       })
       // Realtime reaction/comment/view count updates
       .on('postgres_changes', {

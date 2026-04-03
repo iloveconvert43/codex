@@ -5,11 +5,12 @@ export const dynamic = 'force-dynamic'
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
-import { ArrowLeft, Camera, Plus, Trash2, Loader2, Eye, Users, Lock, Link2 } from 'lucide-react'
+import { ArrowLeft, Camera, Plus, Trash2, Loader2 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { api, swrFetcher, getErrorMessage } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import toast from 'react-hot-toast'
+import ProfileImageCropper from '@/components/profile/ProfileImageCropper'
 
 type Visibility = 'public' | 'followers' | 'private'
 const VIS_ORDER: Visibility[] = ['public', 'followers', 'private']
@@ -56,9 +57,12 @@ export default function EditProfilePage() {
   const coverRef = useRef<HTMLInputElement>(null)
   const avatarRef = useRef<HTMLInputElement>(null)
 
-  const { data: extData } = useSWR(
+  const { data: extData, mutate: mutateExt } = useSWR(
     profile?.id ? `/api/users/extended-profile?user_id=${profile.id}` : null, swrFetcher)
   const ext = (extData as any)?.data
+  const [coverPreview, setCoverPreview] = useState<string | null>(null)
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
+  const [cropState, setCropState] = useState<null | { kind: 'avatar' | 'cover'; file: File }>(null)
 
   // Personal
   const [displayName, setDisplayName] = useState('')
@@ -119,22 +123,50 @@ export default function EditProfilePage() {
     if (ext.privacy_settings) setPriv(p => ({ ...p, ...ext.privacy_settings }))
   }, [ext])
 
-  async function uploadFile(file: File, field: 'avatar_url' | 'cover_url') {
+  useEffect(() => {
+    setCoverPreview(ext?.cover_url || profile?.cover_url || null)
+  }, [ext?.cover_url, profile?.cover_url])
+
+  useEffect(() => {
+    setAvatarPreview(profile?.avatar_url || ext?.avatar_url || null)
+  }, [profile?.avatar_url, ext?.avatar_url])
+
+  async function uploadFile(file: File, field: 'avatar_url' | 'cover_url', previewUrl?: string) {
     try {
       const uploadType = field === 'avatar_url' ? 'avatars' : 'covers'
-      let fileToUpload = file
-      try {
-        const { compressImage } = await import('@/lib/media')
-        const comp = await compressImage(file, uploadType === 'avatars' ? 'avatar' : 'cover')
-        fileToUpload = comp.file
-      } catch { /* use original */ }
       const { uploadToImageKit } = await import('@/lib/upload')
-      const result = await uploadToImageKit(fileToUpload, uploadType as any)
+      const result = await uploadToImageKit(file, uploadType as any)
       if (!result?.url) throw new Error('Upload failed')
-      await api.patch('/api/users/profile', { [field]: result.url }, { requireAuth: true })
+      const response = await api.patch('/api/users/profile', { [field]: result.url }, { requireAuth: true }) as any
       await refreshProfile()
+      mutateExt((current: any) => current ? ({
+        ...current,
+        data: {
+          ...current.data,
+          [field]: response?.data?.[field] || result.url,
+        },
+      }) : current, false)
+      if (field === 'avatar_url') {
+        if (previewUrl && avatarPreview && avatarPreview.startsWith('blob:')) URL.revokeObjectURL(avatarPreview)
+        setAvatarPreview(previewUrl || result.url)
+      } else {
+        if (previewUrl && coverPreview && coverPreview.startsWith('blob:')) URL.revokeObjectURL(coverPreview)
+        setCoverPreview(previewUrl || result.url)
+      }
       toast.success(field === 'avatar_url' ? 'Profile photo updated!' : 'Cover photo updated!')
-    } catch { toast.error('Upload failed') }
+    } catch {
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+      toast.error('Upload failed')
+      throw new Error('Upload failed')
+    }
+  }
+
+  function handleFileSelection(file: File, kind: 'avatar' | 'cover') {
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please choose an image file')
+      return
+    }
+    setCropState({ kind, file })
   }
 
   async function handleSave() {
@@ -169,24 +201,24 @@ export default function EditProfilePage() {
       </div>
 
       {/* Cover photo */}
-      <div className="relative h-36 bg-gradient-to-br from-primary/30 to-accent-purple/30 overflow-hidden cursor-pointer"
+      <div className="relative h-44 sm:h-48 bg-gradient-to-br from-primary/30 to-accent-purple/30 overflow-hidden cursor-pointer rounded-b-[28px]"
         onClick={() => coverRef.current?.click()}>
-        {ext?.cover_url && <img src={ext.cover_url} className="w-full h-full object-cover" alt="Cover" />}
+        {coverPreview && <img src={coverPreview} className="w-full h-full object-cover" alt="Cover" />}
         <div className="absolute inset-0 flex items-center justify-center bg-black/30 hover:bg-black/40 transition-colors">
           <div className="flex items-center gap-2 bg-black/50 text-white px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur">
             <Camera size={14} /> Edit Cover Photo
           </div>
         </div>
         <input ref={coverRef} type="file" accept="image/*" className="hidden"
-          onChange={e => e.target.files?.[0] && uploadFile(e.target.files[0], 'cover_url')} />
+          onChange={e => e.target.files?.[0] && handleFileSelection(e.target.files[0], 'cover')} />
       </div>
 
       {/* Avatar */}
-      <div className="px-4 pb-3 -mt-14 flex items-end gap-4">
+      <div className="px-4 pb-3 -mt-12 flex items-end gap-4">
         <div className="relative">
           <div className="w-24 h-24 rounded-full border-4 border-bg bg-gradient-primary overflow-hidden shadow-2xl">
-            {profile.avatar_url
-              ? <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
+            {avatarPreview
+              ? <img src={avatarPreview} className="w-full h-full object-cover" alt="" />
               : <div className="w-full h-full flex items-center justify-center text-white text-3xl font-black">
                   {(profile.display_name || profile.username || '?')[0].toUpperCase()}
                 </div>}
@@ -196,7 +228,7 @@ export default function EditProfilePage() {
             <Camera size={14} className="text-text" />
           </button>
           <input ref={avatarRef} type="file" accept="image/*" className="hidden"
-            onChange={e => e.target.files?.[0] && uploadFile(e.target.files[0], 'avatar_url')} />
+            onChange={e => e.target.files?.[0] && handleFileSelection(e.target.files[0], 'avatar')} />
         </div>
         <div className="pb-1">
           <p className="font-black text-lg leading-tight">{profile.display_name || profile.full_name || profile.username}</p>
@@ -355,6 +387,21 @@ export default function EditProfilePage() {
           {saving && <Loader2 size={15} className="animate-spin" />}{saving ? 'Saving…' : 'Save All Changes'}
         </button>
       </div>
+
+      {cropState && (
+        <ProfileImageCropper
+          kind={cropState.kind}
+          file={cropState.file}
+          onClose={() => setCropState(null)}
+          onApply={async (croppedFile, previewUrl) => {
+            await uploadFile(
+              croppedFile,
+              cropState.kind === 'avatar' ? 'avatar_url' : 'cover_url',
+              previewUrl
+            )
+          }}
+        />
+      )}
     </div>
   )
 }
